@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -183,9 +183,9 @@ void show_usage(char *appname, struct config_file *config, bool full)
 		ltfsresult(15417I);                         /* -x, --fulltrace */
 		ltfsresult(15424I);                         /* --long-wipe */
 		fprintf(stderr, "\n");
-		plugin_usage("driver", config);
+		plugin_usage(appname, "driver", config);
 		fprintf(stderr, "\n");
-		plugin_usage("kmi", config);
+		plugin_usage(appname, "kmi", config);
 	}
 
 	fprintf(stderr, "\n");

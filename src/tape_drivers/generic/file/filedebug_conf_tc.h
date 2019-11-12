@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -89,16 +89,7 @@ struct filedebug_conf_tc
 	uint64_t  threading_sec;       /**< Time to mechanical threading/unthreading */
 };
 
-struct filedebug_tc_cart_type {
-	char *name;
-	char type_code;
-};
-
-extern struct filedebug_tc_cart_type cart_type[];
-extern int cart_type_size;
-
 int filedebug_conf_tc_write_xml(char *filename, const struct filedebug_conf_tc *conf);
 int filedebug_conf_tc_read_xml(char *filename, struct filedebug_conf_tc *conf);
-
 
 #endif /* __filedebug_conf_tc_h */

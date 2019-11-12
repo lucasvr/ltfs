@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -205,7 +205,7 @@ int itdtimage_parse_opts(void *vstate, void *opt_args)
 	return 0;
 }
 
-void itdtimage_help_message(void)
+void itdtimage_help_message(const char *progname)
 {
 	ltfsresult(31199I, itdtimage_default_device);
 }
@@ -763,7 +763,7 @@ int itdtimage_setcap(void *vstate, uint16_t proportion)
 	return DEVICE_GOOD;
 }
 
-int itdtimage_format(void *vstate, TC_FORMAT_TYPE format)
+int itdtimage_format(void *vstate, TC_FORMAT_TYPE format, const char *vol_name, const char *barcode_name, const char *vol_mam_uuid)
 {
 	struct itdtimage_data *state = (struct itdtimage_data *)vstate;
 	struct tc_position pos;
@@ -988,10 +988,10 @@ int itdtimage_set_default(void *device)
 	return DEVICE_GOOD;
 }
 
-int itdtimage_get_parameters(void *vstate, struct tc_current_param *params)
+int itdtimage_get_parameters(void *vstate, struct tc_drive_param *params)
 {
 	params->max_blksize = FILE_DEBUG_MAX_BLOCK_SIZE;
-	params->write_protected = VOL_PHYSICAL_WP;
+	params->write_protect = VOL_PHYSICAL_WP;
 	return DEVICE_GOOD;
 }
 const char *itdtimage_default_device_name(void)
@@ -1419,6 +1419,20 @@ int itdtimage_get_serialnumber(void *vstate, char **result)
 	return DEVICE_GOOD;
 }
 
+int filedebug_get_info(void *device, struct tc_drive_info *info)
+{
+	/*
+	 * Return dummy data.
+	 * This logic is enough only for single drive supported code.
+	 */
+	info->host    = 0;
+	info->channel = 0;
+	info->target  = 0;
+	info->lun     = -1;
+
+	return 0;
+}
+
 int itdtimage_set_profiler(void *device, char *work_dir, bool enable)
 {
 	/* Do nohting: file backend does not support profiler */
@@ -1522,7 +1536,7 @@ unsigned long long _get_file_size(FILE *fStream)
 		ret|=p.LowPart;
 	}
 #else
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
 	long long tmp = fseeko(fStream, 0LL, SEEK_END);
 	if(tmp != -1){
 		ret = ftello(fStream);
@@ -1566,7 +1580,7 @@ unsigned long long _seek_file(FILE *file, unsigned long long position)
 	}else
 		file->Seek(position, wxFromStart);
 #else
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
 	long long tmp = fseeko(file, position, SEEK_SET);
 #else
 	long long tmp = fseeko64(file, position, SEEK_SET);

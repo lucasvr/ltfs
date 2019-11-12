@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -62,6 +62,11 @@
 #include "pathname.h"
 #include "arch/time_internal.h"
 
+/* O_BINARY is defined only in MinGW */
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 /* Structure to control EE's file offset cache and sync file list */
 struct ltfsee_cache
 {
@@ -79,11 +84,11 @@ static int encode_entry_name(char **new_name, const char *name)
 	UChar32 c;
 
 	/* Printable ASCII characters
-	 * !\"#$%&`'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+	 * !\"#$&`'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 	 *
-	 * In this encoding, only `:` is encoded in this printable character set
+	 * In this encoding, only `:` and `%` is encoded in this printable character set
 	 */
-	static char plain_chars[] = "!\"#$%&`'()*+,-./0123456789;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+	static char plain_chars[] = "!\"#$&`'()*+,-./0123456789;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 	char *tmp_name;
 	char buf_encode[3];
 	int i=0, count=0, prev=0, j=0;
@@ -318,7 +323,7 @@ static int _xml_write_file(xmlTextWriterPtr writer, struct dentry *file, struct 
 	} else {
 		/* Write file offset cache */
 		if (offset_c->fp) {
-			fprintf(offset_c->fp, "%s,%"PRIu64"\n", file->name.name, (uint64_t)0);
+			fprintf(offset_c->fp, "%s,0,0\n", file->name.name);
 			offset_c->count++;
 		}
 	}
@@ -396,7 +401,7 @@ static int _xml_write_dirtree(xmlTextWriterPtr writer, struct dentry *dir,
 		if (list_ptr->d->isdir) {
 
 			if (list_ptr->d->vol->index_cache_path && !strcmp(list_ptr->d->name.name, ".LTFSEE_DATA")) {
-				ret = asprintf(&offset_name, "%s.%s", list_ptr->d->vol->index_cache_path, "offsetcache");
+				ret = asprintf(&offset_name, "%s.%s", list_ptr->d->vol->index_cache_path, "offsetcache.new");
 				if (ret > 0) {
 					offset->fp = fopen(offset_name, "w");
 					free(offset_name);
@@ -405,7 +410,7 @@ static int _xml_write_dirtree(xmlTextWriterPtr writer, struct dentry *dir,
 				} else
 					ltfsmsg(LTFS_WARN, 17247W, "offset cache", list_ptr->d->vol->index_cache_path);
 
-				ret = asprintf(&sync_name, "%s.%s", list_ptr->d->vol->index_cache_path, "synclist");
+				ret = asprintf(&sync_name, "%s.%s", list_ptr->d->vol->index_cache_path, "synclist.new");
 				if (ret > 0) {
 					sync->fp = fopen(sync_name, "w");
 					free(sync_name);
@@ -467,7 +472,6 @@ static int _xml_write_schema(xmlTextWriterPtr writer, const char *creator,
 	size_t i;
 	char *update_time;
 	struct ltfs_name *name_criteria;
-	char *offset_name = NULL, *sync_name = NULL;
 	struct ltfsee_cache offset = {NULL, 0};  /* Cache structure for file offset cache */
 	struct ltfsee_cache list = {NULL, 0};    /* Cache structure for sync list */
 
@@ -543,10 +547,10 @@ static int _xml_write_schema(xmlTextWriterPtr writer, const char *creator,
 		char *value = NULL;
 
 		switch (idx->vollock) {
-			case VOLUME_LOCKED:
+			case LOCKED_MAM:
 				asprintf(&value, "locked");
 				break;
-			case VOLUME_PERM_LOCKED:
+			case PERMLOCKED_MAM:
 				asprintf(&value, "permlocked");
 				break;
 			default:
@@ -558,19 +562,6 @@ static int _xml_write_schema(xmlTextWriterPtr writer, const char *creator,
 			xml_mktag(xmlTextWriterWriteElement(writer, BAD_CAST "volumelockstate", BAD_CAST value), -1);
 
 		free(value);
-	}
-
-	/* unlink offset cache and sync list before rewriting index */
-	ret = asprintf(&offset_name, "%s.%s", idx->root->vol->index_cache_path, "offsetcache");
-	if (ret > 0) {
-		unlink(offset_name);
-		free(offset_name);
-	}
-
-	ret = asprintf(&sync_name, "%s.%s", idx->root->vol->index_cache_path, "synclist");
-	if (ret > 0) {
-		unlink(sync_name);
-		free(sync_name);
 	}
 
 	xml_mktag(_xml_write_dirtree(writer, idx->root, idx, &offset, &list), -1);
@@ -720,14 +711,68 @@ xmlBufferPtr xml_make_schema(const char *creator, const struct ltfs_index *idx)
 	return buf;
 }
 
+static int _commit_offset_caches(const char* path, const struct ltfs_index *idx)
+{
+	int ret = 0, fd = -1;
+	char *offset_name = NULL, *sync_name = NULL;
+	char *offset_new = NULL, *sync_new = NULL;
+
+	if (path) {
+		/* Rename new sync cache and offset cache */
+		ret = asprintf(&offset_new, "%s.%s", path, "offsetcache.new");
+		if (ret > 0) {
+			ret = asprintf(&offset_name, "%s.%s", path, "offsetcache");
+			if (ret > 0) {
+				unlink(offset_name);
+				rename(offset_new, offset_name);
+				fd = open(offset_name, O_RDWR | O_BINARY,
+						  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+				if (fd >= 0) {
+					fsync(fd);
+					close(fd);
+					fd = -1;
+				} else {
+					if (errno != ENOENT)
+						ltfsmsg(LTFS_INFO, 17255I, offset_name, errno);
+				}
+				free(offset_name);
+			}
+			free(offset_new);
+		}
+
+		ret = asprintf(&sync_new, "%s.%s", path, "synclist.new");
+		if (ret > 0) {
+			ret = asprintf(&sync_name, "%s.%s", path, "synclist");
+			if (ret > 0) {
+				unlink(sync_name);
+				rename(sync_new, sync_name);
+				fd = open(sync_name, O_RDWR | O_BINARY,
+						  S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+				if (fd >= 0) {
+					fsync(fd);
+					close(fd);
+					fd = -1;
+				} else {
+					if (errno != ENOENT)
+						ltfsmsg(LTFS_INFO, 17255I, sync_name, errno);
+				}
+				free(sync_name);
+			}
+			free(sync_new);
+		}
+	}
+
+	return 0;
+}
+
 /**
  * Generate an XML schema file based on the priv->root directory tree.
  * @param filename output XML file
  * @param priv ltfs private data
  * @return 0 on success or a negative value on error.
  */
-int xml_schema_to_file(const char *filename, const char *creator
-					   , const char *reason, const struct ltfs_index *idx)
+int xml_schema_to_file(const char *filename, const char *creator,
+					   const char *reason, const struct ltfs_index *idx)
 {
 	xmlTextWriterPtr writer;
 	int ret;
@@ -752,10 +797,14 @@ int xml_schema_to_file(const char *filename, const char *creator
 		ret = _xml_write_schema(writer, alt_creator, idx);
 		if (ret < 0)
 			ltfsmsg(LTFS_ERR, 17052E, ret, filename);
+		else
+			_commit_offset_caches(filename, idx);
+
 		xmlFreeTextWriter(writer);
 		free(alt_creator);
 	} else {
 		ltfsmsg(LTFS_ERR, 10001E, "xml_schema_to_file: alt creator string");
+		xmlFreeTextWriter(writer);
 		return -1;
 	}
 
@@ -770,7 +819,7 @@ int xml_schema_to_file(const char *filename, const char *creator
  */
 int xml_schema_to_tape(char *reason, struct ltfs_volume *vol)
 {
-	int ret;
+	int ret, bk = -1;
 	xmlOutputBufferPtr write_buf;
 	xmlTextWriterPtr writer;
 	struct xml_output_tape *out_ctx;
@@ -792,14 +841,15 @@ int xml_schema_to_tape(char *reason, struct ltfs_volume *vol)
 		return -LTFS_NO_MEMORY;
 	}
 
-	out_ctx->fd = -1;
-
+	out_ctx->fd       = -1;
+	out_ctx->errno_fd = 0;
 	if (vol->index_cache_path)
-		out_ctx->fd = xml_acquire_file_lock(vol->index_cache_path, true);
+		xml_acquire_file_lock(vol->index_cache_path, &out_ctx->fd, &bk, true);
 
 	out_ctx->buf_size = vol->label->blocksize;
 	out_ctx->buf_used = 0;
-	out_ctx->device = vol->device;
+	out_ctx->device   = vol->device;
+	out_ctx->err_code = 0;
 
 	/* Create output buffer pointer. */
 	write_buf = xmlOutputBufferCreateIO(xml_output_tape_write_callback,
@@ -808,10 +858,10 @@ int xml_schema_to_tape(char *reason, struct ltfs_volume *vol)
 	if (! write_buf) {
 		ltfsmsg(LTFS_ERR, 17053E);
 		if (out_ctx->fd >= 0)
-			xml_release_file_lock(out_ctx->fd);
+			xml_release_file_lock(vol->index_cache_path, out_ctx->fd, bk, false);
 		free(out_ctx->buf);
 		free(out_ctx);
-		return -1;
+		return -LTFS_LIBXML2_FAILURE;
 	}
 
 	/* Create XML writer. */
@@ -819,20 +869,36 @@ int xml_schema_to_tape(char *reason, struct ltfs_volume *vol)
 	if (! writer) {
 		ltfsmsg(LTFS_ERR, 17054E);
 		if (out_ctx->fd >= 0)
-			xml_release_file_lock(out_ctx->fd);
+			xml_release_file_lock(vol->index_cache_path, out_ctx->fd, bk, false);
 		xmlOutputBufferClose(write_buf);
-		return -1;
+		free(out_ctx->buf);
+		free(out_ctx);
+		return -LTFS_LIBXML2_FAILURE;
 	}
 
 	/* Generate the Index. */
 	asprintf(&creator, "%s - %s", vol->creator, reason);
 	if (creator) {
 		ret = _xml_write_schema(writer, creator, vol->index);
-		if (ret < 0)
+		if (ret < 0) {
 			ltfsmsg(LTFS_ERR, 17055E, ret);
+		}
 
-		xmlFreeTextWriter(writer);
-		free(creator);
+		xmlFreeTextWriter(writer); /* close callback is called from here */
+
+		if (out_ctx->err_code || out_ctx->errno_fd) {
+			if (out_ctx->err_code) ret = out_ctx->err_code;
+			else if (out_ctx->errno_fd) ret = out_ctx->errno_fd;
+
+			if (out_ctx->fd >= 0)
+				xml_release_file_lock(vol->index_cache_path, out_ctx->fd, bk, true);
+		} else {
+			if (vol->index_cache_path)
+				_commit_offset_caches(vol->index_cache_path, vol->index);
+
+			if (out_ctx->fd >= 0)
+				xml_release_file_lock(vol->index_cache_path, out_ctx->fd, bk, false);
+		}
 
 		/* Update the creator string */
 		if (! vol->index->creator || strcmp(vol->creator, vol->index->creator)) {
@@ -841,14 +907,20 @@ int xml_schema_to_tape(char *reason, struct ltfs_volume *vol)
 			vol->index->creator = strdup(vol->creator);
 			if (! vol->index->creator) {
 				ltfsmsg(LTFS_ERR, 10001E, "xml_schema_to_tape: new creator string");
-				ret = -1;
+				ret = -LTFS_NO_MEMORY;
 			}
 		}
+
+		free(creator);
 	} else {
 		ltfsmsg(LTFS_ERR, 10001E, "xml_schema_to_tape: creator string");
 		xmlFreeTextWriter(writer);
-		ret = -1;
+		xml_release_file_lock(vol->index_cache_path, out_ctx->fd, bk, true);
+		ret = -LTFS_NO_MEMORY;
 	}
+
+	free(out_ctx->buf);
+	free(out_ctx);
 
 	return ret;
 }

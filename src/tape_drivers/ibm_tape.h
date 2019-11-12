@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -80,6 +80,9 @@ static inline int _sense2errorcode(uint32_t sense, struct error_table *table, ch
 	if (msg)
 		*msg = NULL;
 
+	if (!table)
+		return rc;
+
 	if ( (sense & 0xFFFF00) == 0x044000 )
 		sense = 0x044000;
 	else if ( (sense & 0xFFF000) == 0x048000 ) /* 04/8xxx in TS3100/TS3200 */
@@ -140,6 +143,7 @@ enum {
 	DRIVE_TS1140      = 0x1104, /* TS1140 */
 	DRIVE_TS1150      = 0x1105, /* TS1150 */
 	DRIVE_TS1155      = 0x5105, /* TS1155 */
+	DRIVE_TS1160      = 0x1106, /* TS1160 */
 };
 
 enum {
@@ -151,6 +155,7 @@ enum {
 	DRIVE_GEN_JAG4    = 0x1004,
 	DRIVE_GEN_JAG5    = 0x1005,
 	DRIVE_GEN_JAG5A   = 0x5005,
+	DRIVE_GEN_JAG6    = 0x1006,
 };
 
 typedef struct {
@@ -179,7 +184,9 @@ enum {
 	VOLSTATS_ENCRYPTED_REC    = 0x0200,	/* < First encrypted logical object identifier */
 	VOLSTATS_PARTITION_CAP    = 0x0202,	/* < Native capacity of partitions */
 	VOLSTATS_PART_USED_CAP    = 0x0203,	/* < Used capacity of partitions */
+	VOLSTATS_USED_CAPACITY    = 0x0203,	/* HPE alias of VOLSTATS_PART_USED_CAP */
 	VOLSTATS_PART_REMAIN_CAP  = 0x0204,	/* < Remaining capacity of partitions */
+	VOLSTATS_VU_PGFMTVER      = 0xF000,     /* < Vendor-unique PageFormatVersion */
 };
 
 enum {
@@ -228,6 +235,9 @@ enum pro_action {
 	PRO_ACT_REGISTER_MOVE   = 0x07
 };
 
+#define IS_SHORT_MEDIUM(m) (m == TC_MP_JK || m == TC_MP_JL || m == TC_MP_JM)
+#define IS_WORM_MEDIUM(m)  (m == TC_MP_JY || m == TC_MP_JZ || m == TC_MP_JV)
+
 extern DRIVE_DENSITY_SUPPORT_MAP jaguar_drive_density[];
 extern DRIVE_DENSITY_SUPPORT_MAP jaguar_drive_density_strict[];
 extern DRIVE_DENSITY_SUPPORT_MAP lto_drive_density[];
@@ -248,6 +258,9 @@ extern int num_supported_density;
 int  ibm_tape_init_timeout(struct timeout_tape **table, int type);
 void ibm_tape_destroy_timeout(struct timeout_tape **table);
 int  ibm_tape_get_timeout(struct timeout_tape *table, int op_code);
+
+unsigned char ibm_tape_assume_cart_type(const char* type_name);
+char* ibm_tape_assume_cart_name(unsigned char type);
 
 int ibm_tape_is_mountable(const int drive_type,
 						 const char *barcode,

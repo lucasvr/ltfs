@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -120,7 +120,8 @@ void _tape_device_close(struct device_data *device, void * const kmi_handle,
 void tape_device_close_raw(struct device_data *dev);
 #define tape_device_close(dev, kmi_handle, force) _tape_device_close(dev, kmi_handle, false, force)
 
-int tape_device_is_connected(const char *devname, struct tape_ops *ops);
+int tape_device_is_connected(struct device_data *dev, struct tape_ops *ops);
+int tape_get_info(struct device_data *dev, struct tc_drive_info *info);
 int tape_reserve_device(struct device_data *dev);
 void tape_release_device(struct device_data *dev);
 const char *tape_default_device_name(struct tape_ops *ops);
@@ -142,7 +143,7 @@ int tape_set_compression(struct device_data *dev, bool use_compression);
 int tape_get_append_position(struct device_data *dev, tape_partition_t prt, tape_block_t *pos);
 int tape_set_ip_append_position(struct device_data *dev, tape_partition_t prt, tape_block_t block);
 int tape_set_append_position(struct device_data *dev, tape_partition_t prt, tape_block_t block);
-int tape_get_params(struct device_data *dev, struct tc_current_param *param);
+int tape_get_params(struct device_data *dev, struct tc_drive_param *param);
 int tape_get_max_blocksize(struct device_data *dev, unsigned int *size);
 int tape_read_only(struct device_data *dev, tape_partition_t partition);
 int tape_force_read_only(struct device_data *dev);
@@ -179,7 +180,7 @@ int tape_set_media_pool_info(struct ltfs_volume *vol, const char *new_val, int s
 int tape_check_eod_status(struct device_data *dev, const tape_partition_t part);
 int tape_recover_eod_status(struct device_data *dev, void * const kmi_handle);
 
-void tape_print_help_message(struct tape_ops *ops);
+void tape_print_help_message(const char *progname, struct tape_ops *ops);
 int tape_parse_opts(struct device_data *dev, void *opt_args);
 int tape_parse_library_backend_opts(void *opts, void *opt_args);
 
@@ -207,9 +208,9 @@ int tape_set_key(struct device_data *dev, const unsigned char *keyalias, const u
 int tape_clear_key(struct device_data *device, void * const kmi_handle);
 int tape_get_keyalias(struct device_data *dev, unsigned char **keyalias);
 int tape_takedump_drive(struct device_data *dev, bool nonforced_dump);
-const char *tape_get_media_encrypted(struct device_data *dev);
-const char *tape_get_drive_encryption_state(struct device_data *dev);
-const char *tape_get_drive_encryption_method(struct device_data *dev);
+char* tape_get_media_encrypted(struct device_data *dev);
+char* tape_get_drive_encryption_state(struct device_data *dev);
+char* tape_get_drive_encryption_method(struct device_data *dev);
 int tape_get_worm_status(struct device_data *dev, bool *is_worm);
 
 void set_tape_attribute(struct ltfs_volume *vol, struct tape_attr *t_attr);
@@ -221,6 +222,7 @@ int update_tape_attribute (struct ltfs_volume *vol, const char *new_value, int t
 int read_tape_attribute (struct ltfs_volume *vol, char **val, const char *name);
 int tape_is_mountable(struct device_data *dev, char *barcode,
 					  unsigned char cart_type, unsigned char density);
+int tape_is_reformattable(struct device_data *dev, unsigned char cart_type, unsigned char density);
 int tape_set_profiler(struct device_data *dev, char *work_dir, bool enable);
 
 static inline char* tape_get_serialnumber(struct device_data *dev)

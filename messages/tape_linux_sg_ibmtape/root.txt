@@ -3,7 +3,7 @@
 //  OO_Copyright_BEGIN
 //
 //
-//  Copyright 2010, 2018 IBM Corp. All rights reserved.
+//  Copyright 2010, 2019 IBM Corp. All rights reserved.
 //
 //  Redistribution and use in source and binary forms, with or without
 //   modification, are permitted provided that the following conditions
@@ -89,7 +89,7 @@ root:table {
 		30247I:string { "No alternate device is found for drive %s." }
 		30248I:string { "Drive serial is not matched. Actual: %s, Expected %s." }
 		30249I:string { "Opening another path for drive %s on %s." }
-		//unused (moved) 30250W:string { "Drive firmware level does not correctly detect the EOD status." }
+		30250I:string { "Opened SCSI tape device %d.%d.%d.%d (%s)." }
 		30251I:string { "Logical block protection is enabled." }
 		30252I:string { "Logical block protection is disabled." }
 		30253I:string { "Saving drive dump to %s." }
@@ -108,14 +108,31 @@ root:table {
 		30266W:string { "The drive is already reserved: %s (%s)." }
 		30267W:string { "WWPID of reservation: x%02x%02x%02x%02x%02x%02x%02x%02x (%s)." }
 		30268I:string { "Retry to reserve from key registration (%s)." }
-		30269I:string { "Successfully reopen the drive %s with another path. Preempting reservation." }
-		30270I:string { "Power-On-Reset happened in the drive %s." }
-		30271I:string { "Successfully reopen the drive %s with same path." }
-		30272I:string { "Drive %s is reserved successfully." }
+		30269I:string { "Successfully reopened drive %s with another path. Preempting the reservation." }
+		30270I:string { "A power-on-reset happened on drive %s." }
+		30271I:string { "Successfully reopened drive %s with the same path." }
+		30272I:string { "Drive %s is successfully reserved." }
 		30273I:string { "Cannot %s device flag (%d)." }
 		30274I:string { "Pseudo-error on %s." }
 		30275I:string { "Pseudo-error on write. Good return code, but a record to emulate a write error did not get sent to the drive." }
-
+		30276I:string { "Raw capacity info of partition %d (%llu - %llu) %s." }
+		30277W:string { "Detect ENOMEM in ioctl() call. Wait 3 secs and retry (%d)." }
+		30278I:string { "Retrying %s operation at (%u, %llu)." }
+		30279I:string { "Retrying %s operation at (%u, %llu) with skip back, because the command was already executed (%u, %llu)." }
+		30280W:string { "Unexpected current position for %s operation (%d). (%u, %llu), (%u, %llu) ." }
+		30281W:string { "Position confirmation for %s operation retry is failed (%d). (%u, %llu), (%u, %llu)." }
+		30282W:string { "Unexpected position after skip back for %s operation. (%u, %llu), (%u, %llu)." }
+		30283W:string { "Skip back for %s operation is failed (%d). (%u, %llu), (%u, %llu)." }
+		30284E:string { "Cannot get reserved buffer size of %s." }
+		30285I:string { "Reserved buffer size of %s is %d." }
+		30286I:string { "Failed to get cartridge status. The cartridge is not loaded." }
+		30287I:string { "Received an unknown sense code %06x." }
+		30288I:string { "Opening a tape device for drive serial %s." }
+		30289I:string { "Cannot fetch the reservation key (%s, %d)." }
+		30290I:string { "Changer %s isn't reserved from any nodes." }
+		30291I:string { "Changer %s was reserved from this node and can be reserved from the current path." }
+		30292I:string { "Changer %s was reserved from this node but failed to reserve from the current path." }
+		30293I:string { "Changer %s was reserved from another node (%s)." }
 
 		30392D:string { "Backend %s %s." }
 		30393D:string { "Backend %s: %d %s." }

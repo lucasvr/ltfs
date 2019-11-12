@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -59,7 +59,6 @@
 #include "pathname.h"
 #include "index_criteria.h"
 #include "arch/time_internal.h"
-#include "ltfsprintf.h"
 
 /**
  * Read a text node, returning the buffer provided by libxml2.
@@ -312,13 +311,16 @@ int xml_parse_filename(char **out_val, const char *value)
 
 	ret = pathname_normalize(value, out_val);
 	if (ret < 0) {
-		ltfsmsg(LTFS_ERR, 17030E, value);
+		ltfsmsg(LTFS_ERR, 17030E, "name", value);
 		return ret;
-	} else if (pathname_validate_file(*out_val) < 0) {
-		ltfsmsg(LTFS_ERR, 17031E, value);
+	}
+
+	ret = pathname_validate_file(*out_val);
+	if (ret < 0) {
+		ltfsmsg(LTFS_ERR, 17031E, "name", value);
 		free(*out_val);
 		*out_val = NULL;
-		return -1;
+		return ret;
 	}
 
 	return 0;
@@ -340,13 +342,16 @@ int xml_parse_target(char **out_val, const char *value)
 
 	ret = pathname_normalize(value, out_val);
 	if (ret < 0) {
-		ltfsmsg(LTFS_ERR, 17030E, value);
+		ltfsmsg(LTFS_ERR, 17030E, "target", value);
 		return ret;
-	} else if (pathname_validate_target(*out_val) < 0) {
-		ltfsmsg(LTFS_ERR, 17031E, value);
+	}
+
+	ret = pathname_validate_target(*out_val);
+	if (ret < 0) {
+		ltfsmsg(LTFS_ERR, 17031E, "target", value);
 		free(*out_val);
 		*out_val = NULL;
-		return -1;
+		return ret;
 	}
 
 	return 0;

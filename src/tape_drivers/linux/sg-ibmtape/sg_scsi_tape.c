@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -84,6 +84,10 @@ static int sg_sense2errno(sg_io_hdr_t *req, uint32_t *s, char **msg)
 	/* NOTE: error table must be changed in library edition */
 	if (rc == -EDEV_VENDOR_UNIQUE)
 		rc = _sense2errorcode(sense_value, vendor_table, msg, MASK_WITH_SENSE_KEY);
+
+	if (rc == -EDEV_UNKNOWN) {
+		ltfsmsg(LTFS_INFO, 30287I, sense_value);
+	}
 
 	return rc;
 }
@@ -188,6 +192,9 @@ int sg_issue_cdb_command(struct sg_tape *device, sg_io_hdr_t *req, char **msg)
 	CHECK_ARG_NULL(req, -LTFS_NULL_ARG);
 	CHECK_ARG_NULL(msg, -LTFS_NULL_ARG);
 
+	if (device->fd < 0)
+		return -EDEV_NO_CONNECTION;
+
 start:
 	ret = ioctl(device->fd, SG_IO, req);
 	if (ret < 0) {
@@ -195,6 +202,9 @@ start:
 		if (errno == ENODEV) {
 			if (msg) *msg = "No device found";
 			return -EDEV_CONNECTION_LOST;
+		} else if (errno == ENOMEM) {
+			if (msg) *msg = "ioctl ENOMEM error";
+			return -EDEV_BUFFER_ALLOCATE_ERROR;
 		} else {
 			if (msg) *msg = "ioctl error";
 			return -EDEV_INTERNAL_ERROR;

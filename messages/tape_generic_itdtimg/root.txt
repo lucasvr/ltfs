@@ -3,7 +3,7 @@
 //  OO_Copyright_BEGIN
 //
 //
-//  Copyright 2010, 2018 IBM Corp. All rights reserved.
+//  Copyright 2010, 2019 IBM Corp. All rights reserved.
 //
 //  Redistribution and use in source and binary forms, with or without
 //   modification, are permitted provided that the following conditions
@@ -77,7 +77,6 @@ root:table {
 		31196D:string { "Backend %s: %llu." }
 		31197D:string { "Backend %s: (%llu, %llu)." }
 		31198D:string { "Backend %s: (%llu, %llu) FM = %llu." }
-		31199I:string { "itdtimg backend options:\n"
-						"    -o devname=<dev>          tape device (default=%s)\n." }
+		31199I:string { "itdtimg backend options:\n    -o devname=<dev>          tape device (default=%s)\n." }
 	}
 }

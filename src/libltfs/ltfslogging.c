@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -375,14 +375,31 @@ void ltfsprintf_unload_plugin(void *handle)
 }
 
 /* Print a formatted message in the current system locale. */
-int ltfsmsg_internal(bool print_id, int level, char **msg_out, const char *id, ...)
+int ltfsmsg_internal(bool print_id, int level, char **msg_out, const char *_id, ...)
 {
 	const UChar *format_uc = NULL;
 	int32_t prefix_len, format_len;
 	int32_t id_val;
+	char id[16];
+	size_t idlen;
 	UErrorCode err = U_ZERO_ERROR;
 	va_list argp;
 	struct plugin_bundle *entry;
+
+	/*
+	 * We accept quoted id used in HPE backend source,
+	 * hence we need to remove quotes first.
+	 */
+	idlen = strlen(_id);
+	if (idlen > sizeof(id) - 1)
+		goto internal_error;
+
+	if (idlen > 1 && _id[0] == '"' && _id[idlen - 1] == '"') {
+		strncpy(id, _id + 1, idlen - 2);
+		id[idlen - 2] = '\0';
+	} else {
+		strcpy(id, _id);
+	}
 
 	id_val = atol(id);
 
@@ -446,17 +463,17 @@ int ltfsmsg_internal(bool print_id, int level, char **msg_out, const char *id, .
 	}
 
 #ifdef mingw_PLATFORM
-	va_start(argp, id);
+	va_start(argp, _id);
 	vsyslog(level, output_buf, argp);
 	va_end(argp);
 #else
-	va_start(argp, id);
+	va_start(argp, _id);
 	vfprintf(stderr, output_buf, argp);
 	va_end(argp);
 	fprintf(stderr, "\n");
 
 	if (level <= ltfs_syslog_level && ltfs_use_syslog) {
-		va_start(argp, id);
+		va_start(argp, _id);
 		if (level <= LTFS_ERR)
 			vsyslog(syslog_levels[LTFS_ERR], output_buf, argp);
 		else if (level >= LTFS_TRACE)
@@ -468,7 +485,7 @@ int ltfsmsg_internal(bool print_id, int level, char **msg_out, const char *id, .
 #endif
 
 	if (msg_out) {
-		va_start(argp, id);
+		va_start(argp, _id);
 		vsprintf(msg_buf, output_buf, argp);
 		va_end(argp);
 		*msg_out = strdup(msg_buf);
@@ -479,7 +496,7 @@ int ltfsmsg_internal(bool print_id, int level, char **msg_out, const char *id, .
 		if (is_snmp_trapid(id) == true) {
 			/* Send a trap of Info (id and pos+1) */
 			char *pos;
-			va_start(argp, id);
+			va_start(argp, _id);
 			vsprintf(msg_buf, output_buf, argp);
 			va_end(argp);
 			pos = strstr(msg_buf, " ");

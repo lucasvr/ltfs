@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -227,8 +227,8 @@ void usage(char *progname, struct ltfs_fuse_data *priv)
 		fprintf(stderr, "\n");
 		single_drive_advanced_usage(default_driver, priv);
 		fprintf(stderr, "\n");
-		plugin_usage("driver", priv->config);
-		plugin_usage("kmi", priv->config);
+		plugin_usage(progname, "driver", priv->config);
+		plugin_usage(progname, "kmi", priv->config);
 	}
 }
 
@@ -932,7 +932,7 @@ int single_drive_main(struct fuse_args *args, struct ltfs_fuse_data *priv)
 	char *mountpoint = NULL;
 	struct fuse_args tmpa=FUSE_ARGS_INIT(0, NULL);
 	int i;
-	bool is_worm;
+	bool is_worm = false, is_ro = false;
 
 	/*  Setup signal handler to terminate cleanly */
 	ret = ltfs_set_signal_handlers();
@@ -1126,7 +1126,7 @@ int single_drive_main(struct fuse_args *args, struct ltfs_fuse_data *priv)
 		case -LTFS_WRITE_ERROR:
 		case -LTFS_NO_SPACE:
 		case -LTFS_LESS_SPACE:
-		case -LTFS_RDONLY_CART_DRV:
+		case -LTFS_RDONLY_DEN_DRV:
 			/* Do nothing */
 			break;
 		default:
@@ -1159,27 +1159,32 @@ int single_drive_main(struct fuse_args *args, struct ltfs_fuse_data *priv)
 						ltfsmsg(LTFS_INFO, 14074I);
 						break;
 				}
+				is_ro = true;
 				break;
 			case -LTFS_LESS_SPACE:
-				/* Medium has no space to write data. Mounting as read-only */
+				/* Medium has no space to write data. Mounting as R/W for modifying meta-data */
 				ltfsmsg(LTFS_INFO, 14071I);
 				break;
-			case -LTFS_RDONLY_CART_DRV:
+			case -LTFS_RDONLY_DEN_DRV:
 				/* Medium is Read-Only in this device */
 				ltfsmsg(LTFS_INFO, 14078I);
+				is_ro = true;
 				break;
 			default:
 				/* Rollback mount is specified */
 				ltfsmsg(LTFS_INFO, 14072I, priv->rollback_gen);
+				is_ro = true;
 				break;
 		}
 
-		ret = fuse_opt_add_arg(args, "-oro");
-		if (ret < 0) {
-			/* Could not set FUSE option */
-			ltfsmsg(LTFS_ERR, 14001E, "ro", ret);
-			ltfs_volume_free(&priv->data);
-			return 1;
+		if (is_ro) {
+			ret = fuse_opt_add_arg(args, "-oro");
+			if (ret < 0) {
+				/* Could not set FUSE option */
+				ltfsmsg(LTFS_ERR, 14001E, "ro", ret);
+				ltfs_volume_free(&priv->data);
+				return 1;
+			}
 		}
 	}
 

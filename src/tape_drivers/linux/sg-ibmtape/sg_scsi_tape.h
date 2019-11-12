@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -47,6 +47,7 @@
 *************************************************************************************
 */
 
+#include <scsi/scsi.h>
 #include <scsi/sg.h>
 
 #include "tape_drivers/tape_drivers.h"

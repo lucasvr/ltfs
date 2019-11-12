@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -55,7 +55,7 @@
 #endif
 #include <signal.h>
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
 typedef void (*sighandler_t)(int);
 #endif
 

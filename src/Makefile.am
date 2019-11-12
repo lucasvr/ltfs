@@ -3,7 +3,7 @@
 #  OO_Copyright_BEGIN
 #
 #
-#  Copyright 2010, 2018 IBM Corp. All rights reserved.
+#  Copyright 2010, 2019 IBM Corp. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #   modification, are permitted provided that the following conditions
@@ -38,7 +38,7 @@ bin_PROGRAMS = ltfs
 
 ltfs_SOURCES = main.c ltfs_fuse.c
 ltfs_DEPENDENCIES = libltfs/libltfs.la ../messages/libbin_ltfs_dat.a
-ltfs_CPPFLAGS = @AM_CPPFLAGS@ -I ../ltfs-sde/src
+ltfs_CPPFLAGS = @AM_CPPFLAGS@ -I ../ltfs-sde/src -fPIC
 ltfs_LDADD = libltfs/libltfs.la
 ltfs_LDFLAGS = @AM_LDFLAGS@ -L../messages -lbin_ltfs_dat
 endif
@@ -55,6 +55,10 @@ endif
 
 if PLATFORM_FREEBSD
 PLAT_DRV += tape_drivers/freebsd/cam
+endif
+
+if PLATFORM_NETBSD
+PLAT_DRV += tape_drivers/netbsd/scsipi-ibmtape
 endif
 
 if ENABLE_LIN_TAPE
@@ -108,6 +112,8 @@ nobase_pkginclude_HEADERS = \
 	libltfs/ltfs_types.h \
 	libltfs/ltfs_thread.h \
 	libltfs/ltfs_locking.h \
+	libltfs/ltfs_locking_old.h \
+	libltfs/ltfs_locking_new.h \
 	libltfs/queue.h \
 	libltfs/uthash.h \
 	libltfs/uthash_ext.h \
@@ -115,4 +121,8 @@ nobase_pkginclude_HEADERS = \
 	libltfs/tape.h \
 	libltfs/arch/signal_internal.h \
 	libltfs/arch/arch_info.h \
-	libltfs/arch/time_internal.h
+	libltfs/arch/time_internal.h \
+	tape_drivers/ibm_tape.h \
+	tape_drivers/spc_op_codes.h \
+	tape_drivers/ssc_op_codes.h \
+	tape_drivers/tape_drivers.h

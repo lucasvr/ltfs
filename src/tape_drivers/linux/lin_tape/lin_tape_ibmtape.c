@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -81,30 +81,32 @@
 #include "crc32c_crc.h"
 
 struct lin_tape_ibmtape {
-	int                 fd;                   /**< file descriptor of the device */
-	bool                loaded;               /**< Is cartridge loaded? */
-	bool                loadfailed;           /**< Is load/unload failed? */
-	unsigned char       drive_serial[255];    /**< serial number of device */
-	int                 drive_type;           /**< drive type */
-	char                *devname;             /**< device name */
-	long                fetch_sec_acq_loss_w; /**< Sec to fetch Active CQs loss write */
-	bool                dirty_acq_loss_w;     /**< Is Active CQs loss write dirty */
-	float               acq_loss_w;           /**< Active CQs loss write */
-	uint64_t            tape_alert;           /**< Latched tape alert flag */
-	bool                is_data_key_set;      /**< Is a valid data key set? */
-	unsigned char       dki[12];              /**< key-alias */
-	uint64_t            force_writeperm;      /**< pseudo write perm threshold */
-	uint64_t            force_readperm;       /**< pseudo read perm threashold */
-	uint64_t            write_counter;        /**< write call counter for pseudo write perm */
-	uint64_t            read_counter;         /**< read call counter for pseudo write perm */
-	int                 force_errortype;      /**< 0 is R/W Perm, otherwise no sense */
-	bool                is_worm;              /**< Is worm cartridge loaded? */
-	unsigned char       cart_type;            /**< Cartridge type in CM */
-	unsigned char       density_code;         /**< Density code */
-	crc_enc             f_crc_enc;            /**< Pointer to CRC encode function */
-	crc_check           f_crc_check;          /**< Pointer to CRC encode function */
-	struct timeout_tape *timeouts;            /**< Timeout table */
-	FILE*               profiler;             /**< The file pointer for profiler */
+	int                  fd;                   /**< file descriptor of the device */
+	bool                 loaded;               /**< Is cartridge loaded? */
+	bool                 loadfailed;           /**< Is load/unload failed? */
+	unsigned char        drive_serial[255];    /**< serial number of device */
+	int                  drive_type;           /**< drive type */
+	char                 *devname;             /**< device name */
+	long                 fetch_sec_acq_loss_w; /**< Sec to fetch Active CQs loss write */
+	bool                 dirty_acq_loss_w;     /**< Is Active CQs loss write dirty */
+	float                acq_loss_w;           /**< Active CQs loss write */
+	uint64_t             tape_alert;           /**< Latched tape alert flag */
+	bool                 is_data_key_set;      /**< Is a valid data key set? */
+	unsigned char        dki[12];              /**< key-alias */
+	bool                 clear_by_pc;          /**< clear pseudo write perm by partition change */
+	uint64_t             force_writeperm;      /**< pseudo write perm threshold */
+	uint64_t             force_readperm;       /**< pseudo read perm threashold */
+	uint64_t             write_counter;        /**< write call counter for pseudo write perm */
+	uint64_t             read_counter;         /**< read call counter for pseudo write perm */
+	int                  force_errortype;      /**< 0 is R/W Perm, otherwise no sense */
+	bool                 is_worm;              /**< Is worm cartridge loaded? */
+	unsigned char        cart_type;            /**< Cartridge type in CM */
+	unsigned char        density_code;         /**< Density code */
+	crc_enc              f_crc_enc;            /**< Pointer to CRC encode function */
+	crc_check            f_crc_check;          /**< Pointer to CRC encode function */
+	struct timeout_tape  *timeouts;            /**< Timeout table */
+	struct tc_drive_info info;                 /**< Drive information */
+	FILE*                profiler;             /**< The file pointer for profiler */
 };
 
 struct lin_tape_ibmtape_global_data {
@@ -134,8 +136,6 @@ volatile char *copyright = LTFS_COPYRIGHT_0"\n"LTFS_COPYRIGHT_1"\n"LTFS_COPYRIGH
 
 #define DK_LENGTH 32
 #define DKI_LENGTH 12
-
-#define THREASHOLD_FORCE_WRITE_NO_WRITE (5)
 
 #define CRC32C_CRC (0x02)
 
@@ -217,6 +217,8 @@ int lin_tape_ibmtape_modesense(void *device, const uint8_t page, const TC_MP_PC_
 int lin_tape_ibmtape_set_key(void *device, const unsigned char * const keyalias, const unsigned char * const key);
 int lin_tape_ibmtape_set_lbp(void *device, bool enable);
 int lin_tape_ibmtape_takedump_drive(void *device, bool nonforced_dump);
+int lin_tape_ibmtape_get_device_list(struct tc_drive_info *buf, int count);
+static const char *generate_product_name(const char *product_id);
 
 /*
  *  Local Functions
@@ -739,6 +741,22 @@ int lin_tape_ibmtape_get_serialnumber(void *device, char **result)
 }
 
 /**
+ * Get the tape device's information
+ * This function must not issue any scsi command to the device.
+ * @param device a pointer to the tape device
+ * @param[out] info On success, contains device information.
+ * @return 0 on success or a negative value on error
+ */
+int lin_tape_ibmtape_get_info(void *device, struct tc_drive_info *info)
+{
+	struct lin_tape_ibmtape *priv = (struct lin_tape_ibmtape*)device;
+
+	memcpy(info, &priv->info, sizeof(struct tc_drive_info));
+
+	return 0;
+}
+
+/**
  * Enable profiler function
  * @param device a pointer to the tape device
  * @param work_dir work directory to store profiler data
@@ -975,6 +993,10 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 	struct tc_inq_page inq_page_data;
 	int drive_type = DRIVE_UNSUPPORTED;
 	int ret;
+	char *devfile = NULL;
+	int i, devs = 0, info_devs = 0;
+	struct tc_drive_info *buf = NULL;
+	struct stat stat_buf;
 
 	CHECK_ARG_NULL(handle, -LTFS_NULL_ARG);
 	*handle = NULL;
@@ -992,7 +1014,47 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 		return -EDEV_NO_MEMORY;
 	}
 
-	priv->fd = open(devname, O_RDWR | O_NDELAY);
+	ret = stat(devname, &stat_buf);
+	if (!ret) {
+		/* Specified file is existed. Use it as a device file name */
+		devfile = strdup(devname);
+	} else {
+		/* Search device by serial number (Assume devname has a drive serial) */
+		devs = lin_tape_ibmtape_get_device_list(NULL, 0);
+		if (devs) {
+			buf = (struct tc_drive_info *)calloc(devs * 2, sizeof(struct tc_drive_info));
+			if (! buf) {
+				ltfsmsg(LTFS_ERR, 10001E, __FUNCTION__);
+				return -LTFS_NO_MEMORY;
+			}
+			info_devs = lin_tape_ibmtape_get_device_list(buf, devs * 2);
+		}
+
+		for (i = 0; i < info_devs; i++) {
+			if (! strncmp(buf[i].serial_number, devname, TAPE_SERIAL_LEN_MAX) ) {
+				devfile = strdup(buf[i].name);
+				if (!devfile) {
+					ltfsmsg(LTFS_ERR, 10001E, "lin_tape_ibmtape_open: devname");
+					if (buf) free(buf);
+					free(priv);
+					return -EDEV_NO_MEMORY;
+				}
+				break;
+			}
+		}
+
+		if (buf) {
+			free(buf);
+			buf = NULL;
+		}
+	}
+
+	if (!devfile) {
+		free(priv);
+		return -LTFS_NO_DEVICE;
+	}
+
+	priv->fd = open(devfile, O_RDWR | O_NDELAY);
 	if (priv->fd < 0) {
 		priv->fd = open(devname, O_RDONLY | O_NDELAY);
 		if (priv->fd < 0) {
@@ -1004,6 +1066,7 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 				ret = -EDEV_DEVICE_UNOPENABLE;
 			}
 			free(priv);
+			free(devfile);
 			return ret;
 		}
 		ltfsmsg(LTFS_WARN, 30426W, devname);
@@ -1014,6 +1077,7 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 		ltfsmsg(LTFS_INFO, 30427I, ret);
 		close(priv->fd);
 		free(priv);
+		free(devfile);
 		return ret;
 	} else {
 		ltfsmsg(LTFS_INFO, 30428I, inq_data.pid);
@@ -1043,6 +1107,7 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 			ltfsmsg(LTFS_INFO, 30430I, inq_data.pid);
 			close(priv->fd);
 			free(priv);
+			free(devfile);
 			return -EDEV_DEVICE_UNSUPPORTABLE;
 		}
 	}
@@ -1053,6 +1118,7 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 		ltfsmsg(LTFS_INFO, 30431I, TC_INQ_PAGE_DRVSERIAL, ret);
 		close(priv->fd);
 		free(priv);
+		free(devfile);
 		return ret;
 	}
 
@@ -1069,6 +1135,7 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 		ltfsmsg(LTFS_INFO, 30430I, "firmware");
 		close(priv->fd);
 		free(priv);
+		free(devfile);
 		return -EDEV_UNSUPPORTED_FIRMWARE;
 	}
 
@@ -1077,11 +1144,26 @@ int lin_tape_ibmtape_open(const char *devname, void **handle)
 	priv->loaded = false; /* Assume tape is not loaded until a successful load call. */
 	priv->devname = strdup(devname);
 
+	priv->clear_by_pc     = false;
 	priv->force_writeperm = DEFAULT_WRITEPERM;
 	priv->force_readperm  = DEFAULT_READPERM;
 	priv->force_errortype = DEFAULT_ERRORTYPE;
 
+	snprintf(priv->info.name, TAPE_DEVNAME_LEN_MAX + 1, "%s", devfile);
+	snprintf(priv->info.vendor, TAPE_VENDOR_NAME_LEN_MAX + 1, "%s", inq_data.vid);
+	snprintf(priv->info.model, TAPE_MODEL_NAME_LEN_MAX + 1, "%s", inq_data.pid);
+	snprintf(priv->info.serial_number, TAPE_SERIAL_LEN_MAX + 1, "%s", priv->drive_serial);
+	snprintf(priv->info.product_rev, PRODUCT_REV_LENGTH + 1, "%s", inq_data.revision);
+	snprintf(priv->info.product_name, PRODUCT_NAME_LENGTH + 1, "%s", generate_product_name((char *)inq_data.pid));
+	priv->info.host    = 0;
+	priv->info.channel = 0;
+	priv->info.target  = 0;
+	priv->info.lun     = -1;
+
+	free(devfile);
+
 	*handle = (void *) priv;
+
 	return DEVICE_GOOD;
 }
 
@@ -1426,7 +1508,7 @@ int lin_tape_ibmtape_write(void *device, const char *buf, size_t count, struct t
 				return -EDEV_NO_SENSE;
 			else
 				return -EDEV_WRITE_PERM;
-		} else if ( priv->write_counter > (priv->force_writeperm - THREASHOLD_FORCE_WRITE_NO_WRITE) ) {
+		} else if ( priv->write_counter > (priv->force_writeperm - THRESHOLD_FORCE_WRITE_NO_WRITE) ) {
 			ltfsmsg(LTFS_INFO, 30435I);
 			pos->block++;
 			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_WRITE));
@@ -1606,6 +1688,7 @@ int lin_tape_ibmtape_rewind(void *device, struct tc_position *pos)
 		lin_tape_ibmtape_process_errors(device, rc, msg, "rewind", true);
 	}
 
+	priv->clear_by_pc     = false;
 	priv->force_writeperm = DEFAULT_WRITEPERM;
 	priv->force_readperm  = DEFAULT_READPERM;
 	priv->write_counter = 0;
@@ -1639,14 +1722,16 @@ int lin_tape_ibmtape_locate(void *device, struct tc_position dest, struct tc_pos
 		set_part.partition_number = dest.partition;
 		set_part.logical_block_id = dest.block;
 
-		priv->force_writeperm = DEFAULT_WRITEPERM;
-		priv->force_readperm  = DEFAULT_READPERM;
-		priv->write_counter = 0;
-		priv->read_counter  = 0;
+		if (priv->clear_by_pc) {
+			priv->clear_by_pc     = false;
+			priv->force_writeperm = DEFAULT_WRITEPERM;
+			priv->force_readperm  = DEFAULT_READPERM;
+			priv->write_counter = 0;
+			priv->read_counter  = 0;
+		}
 
 		rc = _sioc_stioc_command(device, STIOC_SET_ACTIVE_PARTITION, "LOCATE(PART)", &set_part, &msg);
-	}
-	else {
+	} else {
 		memset(&setpos, 0, sizeof(struct set_tape_position));
 		setpos.logical_id = dest.block;
 		setpos.logical_id_type = LOGICAL_ID_BLOCK_TYPE;
@@ -1927,6 +2012,7 @@ int lin_tape_ibmtape_load(void *device, struct tc_position *pos)
 	priv->loaded        = true;
 	priv->is_worm       = false;
 
+	priv->clear_by_pc     = false;
 	priv->force_writeperm = DEFAULT_WRITEPERM;
 	priv->force_readperm  = DEFAULT_READPERM;
 	priv->write_counter = 0;
@@ -1964,6 +2050,7 @@ int lin_tape_ibmtape_unload(void *device, struct tc_position *pos)
 
 	rc = _lin_tape_ibmtape_load_unload(device, false, pos);
 
+	priv->clear_by_pc     = false;
 	priv->force_writeperm = DEFAULT_WRITEPERM;
 	priv->force_readperm  = DEFAULT_READPERM;
 	priv->write_counter = 0;
@@ -2048,9 +2135,12 @@ int lin_tape_ibmtape_readpos(void *device, struct tc_position *pos)
  * Make/Unmake partition
  * @param device a pointer to the ibmtape backend
  * @param format specify type of format
+ * @param vol_name Volume name, unused by libtlfs (HPE extension)
+ * @param vol_name Barcode name, unused by libtlfs (HPE extension)
+ * @param vol_mam_uuid Volume UUID, unused by libtlfs (HPE extension)
  * @return 0 on success or a negative value on error
  */
-int lin_tape_ibmtape_format(void *device, TC_FORMAT_TYPE format)
+int lin_tape_ibmtape_format(void *device, TC_FORMAT_TYPE format, const char *vol_name, const char *barcode_name, const char *vol_mam_uuid)
 {
 	struct sioc_pass_through spt;
 	int rc, aux_rc;
@@ -3055,7 +3145,7 @@ int lin_tape_ibmtape_clear_tape_alert(void *device, uint64_t tape_alert)
 	return length;
 }
 
-int lin_tape_ibmtape_get_parameters(void *device, struct tc_current_param *params)
+int lin_tape_ibmtape_get_parameters(void *device, struct tc_drive_param *params)
 {
 	int rc;
 	unsigned char buf[TC_MP_MEDIUM_SENSE_SIZE];
@@ -3063,7 +3153,7 @@ int lin_tape_ibmtape_get_parameters(void *device, struct tc_current_param *param
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_GETPARAM));
 
-	memset(params, 0x00, sizeof(struct tc_current_param));
+	memset(params, 0x00, sizeof(struct tc_drive_param));
 
 	if (global_data.crc_checking)
 		params->max_blksize = MIN(_lin_tape_ibmtape_get_block_limits(device),  LINUX_MAX_BLOCK_SIZE - 4);
@@ -3071,7 +3161,7 @@ int lin_tape_ibmtape_get_parameters(void *device, struct tc_current_param *param
 		params->max_blksize = MIN(_lin_tape_ibmtape_get_block_limits(device),  LINUX_MAX_BLOCK_SIZE);
 
 	if (priv->loaded) {
-		params->write_protected = 0;
+		params->write_protect = 0;
 
 		if (IS_ENTERPRISE(priv->drive_type)) {
 			rc = lin_tape_ibmtape_modesense(device, TC_MP_MEDIUM_SENSE, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
@@ -3083,11 +3173,11 @@ int lin_tape_ibmtape_get_parameters(void *device, struct tc_current_param *param
 			char wp_flag = buf[26];
 
 			if (wp_flag & 0x80) {
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 			} else if (wp_flag & 0x01) {
-				params->write_protected |= VOL_PERM_WP;
+				params->write_protect |= VOL_PERM_WP;
 			} else if (wp_flag & 0x10) {
-				params->write_protected |= VOL_PERS_WP;
+				params->write_protect |= VOL_PERS_WP;
 			}
 		} else {
 			rc = lin_tape_ibmtape_modesense(device, 0x00, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
@@ -3097,7 +3187,7 @@ int lin_tape_ibmtape_get_parameters(void *device, struct tc_current_param *param
 			}
 
 			if ( (buf[3] & 0x80) )
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 		}
 
 		params->cart_type = priv->cart_type;
@@ -3125,7 +3215,7 @@ static const char *generate_product_name(const char *product_id)
 	int i = 0;
 
 	for (i = 0; ibm_supported_drives[i]; ++i) {
-		if (strncmp(ibm_supported_drives[i]->product_id, product_id, strlen(product_id)) == 0) {
+		if (strncmp(ibm_supported_drives[i]->product_id, product_id, strlen(ibm_supported_drives[i]->product_id)) == 0) {
 			product_name = ibm_supported_drives[i]->product_name;
 			break;
 		}
@@ -3185,6 +3275,10 @@ int lin_tape_ibmtape_get_device_list(struct tc_drive_info *buf, int count)
 				snprintf(buf[i].model, TAPE_MODEL_NAME_LEN_MAX, "%s", model);
 				snprintf(buf[i].serial_number, TAPE_SERIAL_LEN_MAX, "%s", sn);
 				snprintf(buf[i].product_name, PRODUCT_NAME_LENGTH, "%s", generate_product_name(model));
+				buf[i].host    = 0;
+				buf[i].channel = 0;
+				buf[i].target  = 0;
+				buf[i].lun     = -1;
 			}
 			i++;
 		}
@@ -3217,13 +3311,18 @@ int lin_tape_ibmtape_setcap(void *device, uint16_t proportion)
 
 		/* Scale media instead of setcap */
 		rc = lin_tape_ibmtape_modesense(device, TC_MP_MEDIUM_SENSE, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
+		if (rc < 0) {
+			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETCAP));
+			return rc;
+		}
 
 		/* Check Cartridge type */
-		if (rc == 0 &&
-			(buf[2] == TC_MP_JK || buf[2] == TC_MP_JY || buf[2] == TC_MP_JL || buf[2] == TC_MP_JZ)) {
+		if (IS_SHORT_MEDIUM(buf[2]) || IS_WORM_MEDIUM(buf[2])) {
 			/* Short or WORM cartridge cannot be scaled */
 			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETCAP));
 			return DEVICE_GOOD;
+		} else {
+			return rc;
 		}
 
 		buf[0]   = 0x00;
@@ -3418,6 +3517,7 @@ int lin_tape_ibmtape_set_xattr(void *device, const char *name, const char *buf, 
 	int rc = -LTFS_NO_XATTR;
 	char *null_terminated;
 	struct lin_tape_ibmtape *priv = (struct lin_tape_ibmtape *) device;
+	int64_t perm_count = 0;
 
 	if (!size)
 		return -LTFS_BAD_ARG;
@@ -3434,15 +3534,30 @@ int lin_tape_ibmtape_set_xattr(void *device, const char *name, const char *buf, 
 	null_terminated[size] = '\0';
 
 	if (! strcmp(name, "ltfs.vendor.IBM.forceErrorWrite")) {
-		priv->force_writeperm = strtoull(null_terminated, NULL, 0);
-		if (priv->force_writeperm && priv->force_writeperm < THREASHOLD_FORCE_WRITE_NO_WRITE)
-			priv->force_writeperm = THREASHOLD_FORCE_WRITE_NO_WRITE;
+		perm_count = strtoll(null_terminated, NULL, 0);
+		if (perm_count < 0) {
+			priv->force_writeperm = -perm_count;
+			priv->clear_by_pc     = true;
+		} else {
+			priv->force_writeperm = perm_count;
+			priv->clear_by_pc     = false;
+		}
+		if (priv->force_writeperm && priv->force_writeperm < THRESHOLD_FORCE_WRITE_NO_WRITE)
+			priv->force_writeperm = THRESHOLD_FORCE_WRITE_NO_WRITE;
+		priv->write_counter = 0;
 		rc = DEVICE_GOOD;
 	} else if (! strcmp(name, "ltfs.vendor.IBM.forceErrorType")) {
 		priv->force_errortype = strtol(null_terminated, NULL, 0);
 		rc = DEVICE_GOOD;
 	} else if (! strcmp(name, "ltfs.vendor.IBM.forceErrorRead")) {
-		priv->force_readperm = strtoull(null_terminated, NULL, 0);
+		perm_count = strtoll(null_terminated, NULL, 0);
+		if (perm_count < 0) {
+			priv->force_readperm = -perm_count;
+			priv->clear_by_pc    = true;
+		} else {
+			priv->force_readperm = perm_count;
+			priv->clear_by_pc    = false;
+		}
 		priv->read_counter = 0;
 		rc = DEVICE_GOOD;
 	}
@@ -3452,7 +3567,7 @@ int lin_tape_ibmtape_set_xattr(void *device, const char *name, const char *buf, 
 	return rc;
 }
 
-void lin_tape_ibmtape_help_message(void)
+void lin_tape_ibmtape_help_message(const char *progname)
 {
 	ltfsresult(30599I, lin_tape_ibmtape_default_device);
 }
@@ -4279,6 +4394,7 @@ struct tape_ops lin_tape_ibmtape_drive_handler = {
 	.is_mountable           = lin_tape_ibmtape_is_mountable,
 	.get_worm_status        = lin_tape_ibmtape_get_worm_status,
 	.get_serialnumber       = lin_tape_ibmtape_get_serialnumber,
+	.get_info               = lin_tape_ibmtape_get_info,
 	.set_profiler           = lin_tape_ibmtape_set_profiler,
 	.get_block_in_buffer    = lin_tape_ibmtape_get_block_in_buffer,
 	.is_readonly            = lin_tape_ibmtape_is_readonly,

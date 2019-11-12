@@ -3,7 +3,7 @@
 #  OO_Copyright_BEGIN
 #
 #
-#  Copyright 2010, 2018 IBM Corp. All rights reserved.
+#  Copyright 2010, 2019 IBM Corp. All rights reserved.
 #
 #  Redistribution and use in source and binary forms, with or without
 #   modification, are permitted provided that the following conditions
@@ -35,16 +35,18 @@
 
 bin_PROGRAMS = mkltfs ltfsck
 
+nobase_bin_SCRIPTS = ltfs_ordered_copy
+
 noinst_HEADERS =
 
 mkltfs_SOURCES = mkltfs.c
 mkltfs_DEPENDENCIES = ../libltfs/libltfs.la ../../messages/libbin_mkltfs_dat.a
 mkltfs_LDADD = ../libltfs/libltfs.la
 mkltfs_LDFLAGS = @AM_LDFLAGS@ -L../../messages -lbin_mkltfs_dat
-mkltfs_CPPFLAGS = @AM_CPPFLAGS@ -I ..
+mkltfs_CPPFLAGS = @AM_CPPFLAGS@ -I .. -fPIC
 
 ltfsck_SOURCES = ltfsck.c
 ltfsck_DEPENDENCIES = ../libltfs/libltfs.la ../../messages/libbin_ltfsck_dat.a
 ltfsck_LDADD = ../libltfs/libltfs.la
 ltfsck_LDFLAGS = @AM_LDFLAGS@ -L../../messages -lbin_ltfsck_dat
-ltfsck_CPPFLAGS = @AM_CPPFLAGS@ -I ..
+ltfsck_CPPFLAGS = @AM_CPPFLAGS@ -I .. -fPIC

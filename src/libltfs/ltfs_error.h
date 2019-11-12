@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -43,6 +43,10 @@
 ** AUTHORS:         Brian Biskeborn
 **                  IBM Almaden Research Center
 **                  bbiskebo@us.ibm.com
+**
+**                  Atsushi Abe
+**                  IBM Tokyo Lab., Japan
+**                  piste@jp.ibm.com
 **
 *************************************************************************************
 */
@@ -224,7 +228,7 @@
 #define LTFS_NO_DMAP_ENTRY        1169  /* No dmap entry */
 #define LTFS_RECOVERABLE_FILE_ERR 1170  /* Recoverable Error in file operation (mkdir, stat, rename, etc) */
 #define LTFS_NO_DCACHE_SPC        1171  /* Failed to expabd dcache space */
-// 1172 unused
+#define LTFS_POS_SUSPECT_BOP      1172  /* If a write FM is attempted at BOP partition 0 */
 // 1173 unused
 // 1174 unused
 // 1175 unused
@@ -232,7 +236,7 @@
 // 1177 unused
 // 1178 unused
 // 1179 unused
-// 1180 unused
+#define LTFS_CACHE_IO             1180  /* IO error on cache operation */
 #define LTFS_CACHE_DISCARDED      1181  /* Cache is corrupted and discarded */
 #define LTFS_LONG_WRITE_LOCK      1182  /* Long MRSW for write is aquired */
 #define LTFS_INCOMPATIBLE_CACHE   1183  /* Incompatible cache file is detected */
@@ -246,7 +250,7 @@
 #define LTFS_NODE_DEGATE_FAIL     1191  /* Failed to degate other nodes */
 #define LTFS_CLUSTER_MRSW_FAIL    1192  /* Failed to opetate against a cluster wide lock */
 #define LTFS_CART_NOT_MOUNTED     1193  /* Got a request against an unmounted cartridge */
-#define LTFS_RDONLY_CART_DRV      1194  /* Readonly cart & drive generation combination */
+#define LTFS_RDONLY_DEN_DRV       1194  /* Read only combination of density code and drive generation */
 #define LTFS_NEED_DRIVE_SELECTION 1195  /* Drive selection is needed again */
 #define LTFS_MUTEX_ALREADY_LOCKED 1196  /* Mutex is already locked */
 #define LTFS_TAPE_UNDER_PROCESS   1197  /* This tape is already under processing */
@@ -327,6 +331,7 @@
 #define EDEV_HARDWARE_ERROR          20400  /* 04/xxxx Other H/W errors */
 #define EDEV_LBP_WRITE_ERROR         20401  /* 04/1001 Logical Block Guard Check Failed */
 #define EDEV_LBP_READ_ERROR          20402  /* ------- Logical Block Protection read error */
+#define EDEV_NO_CONNECTION           20403  /* There is no connection to the device */
 #define EDEV_HARDWARE_MAX            20499  /* Maximum hardware error value */
 
 #define IS_HARDWARE_ERROR(e)         ((e>=EDEV_HARDWARE_MIN)&&(e<=EDEV_HARDWARE_MAX))
@@ -375,6 +380,7 @@
 #define EDEV_ABORTED_COMMAND         21100  /* 0B/XXXX Other aborted command conditions */
 #define EDEV_OVERLAPPED              21101  /* 0B/4E00 Overlapped commands */
 #define EDEV_TIMEOUT                 21102  /* 0B/4B06 Initiator response timeout */
+#define EDEV_ABORT_WAIT_READY        21103  /* 0B/2907 0B/0800 0B/0801 on Library */
 
 /* Sense Key D Volume Overflow */
 #define EDEV_OVERFLOW                21300  /* 0D/XXXX The medium is overflowed */
@@ -410,6 +416,8 @@
 #define EDEV_NO_RESERVATION_HOLDER   21721  /* No reservation holder */
 #define EDEV_NEED_FAILOVER           21722  /* Path switch happens, need to reissue the command */
 #define EDEV_REAL_POWER_ON_RESET     21723  /* Real power on reset is detected */
+#define EDEV_BUFFER_ALLOCATE_ERROR   21724  /* Buffer allocation error in a driver */
+#define EDEV_RETRY                   21725  /* Retry the command again */
 
 /* Vendor Unique codes */
 #define EDEV_UNKNOWN                 29998  /* Unknown sense code */

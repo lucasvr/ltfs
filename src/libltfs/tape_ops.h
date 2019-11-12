@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -80,11 +80,16 @@
 #define TAPE_SERIAL_LEN_MAX         (32)
 
 struct tc_drive_info {
-	char name[TAPE_DEVNAME_LEN_MAX + 1];           /* Device name like "/dev/IBMtape0" */
-	char vendor[TAPE_VENDOR_NAME_LEN_MAX + 1];     /* Vendor code "IBM" */
-	char model[TAPE_MODEL_NAME_LEN_MAX + 1];       /* Device identifier */
-	char serial_number[TAPE_SERIAL_LEN_MAX + 1];   /* Serial number of the drvice */
-	char product_name[PRODUCT_NAME_LENGTH + 1];    /* Product name like " [ULTRIUM-TD5]" */
+	char name[TAPE_DEVNAME_LEN_MAX + 1];         /**< Device name like "/dev/IBMtape0" */
+	char vendor[TAPE_VENDOR_NAME_LEN_MAX + 1];   /**< Vendor code "IBM" */
+	char model[TAPE_MODEL_NAME_LEN_MAX + 1];     /**< Device identifier */
+	char serial_number[TAPE_SERIAL_LEN_MAX + 1]; /**< Serial number of the drvice */
+	char product_name[PRODUCT_NAME_LENGTH + 1];  /**< Product name like " [ULTRIUM-TD5]" */
+	char product_rev[PRODUCT_REV_LENGTH + 1];    /**< Firmware revision */
+	char host;                                   /**< SCSI host */
+	char channel;                                /**< SCSI channel */
+	char target;                                 /**< SCSI target ID */
+	char lun;                                    /**< SCSI LUN */
 };
 
 typedef uint64_t tape_filemarks_t;
@@ -115,14 +120,15 @@ struct tc_inq_page {
 
 #define TC_INQ_PAGE_DRVSERIAL (0x80)
 
-struct tc_current_param {
+struct tc_drive_param {
 	/* Parameters for tape drive*/
 	unsigned int  max_blksize;           /* Maximum block size */
 
 	/* Parameters for current loaded tape */
 	unsigned char cart_type;             /* Cartridge type in CM like TC_MP_JB */
 	unsigned char density;               /* Current density code */
-	unsigned int  write_protected;       /* Write protect status of the tape (use bit field of volumelock_status) */
+	unsigned int  write_protect;         /* Write protect status of the tape (use bit field of volumelock_status) */
+	unsigned int  logical_write_protect; /* Logical Write Protect */
 	/* TODO: Following field shall be handled by backend but currently they are not implemented yet */
 	//bool          is_encrypted;          /* Is encrypted tape ? */
 	//bool          is_worm;               /* Is worm tape? */
@@ -154,12 +160,29 @@ enum {
 	TC_DC_JAG4    = 0x54,
 	TC_DC_JAG5    = 0x55,
 	TC_DC_JAG5A   = 0x56,
+	TC_DC_JAG6    = 0x57,
 	TC_DC_JAG1E   = 0x71,
 	TC_DC_JAG2E   = 0x72,
 	TC_DC_JAG3E   = 0x73,
 	TC_DC_JAG4E   = 0x74,
 	TC_DC_JAG5E   = 0x75,
 	TC_DC_JAG5AE  = 0x76,
+	TC_DC_JAG6E   = 0x77,
+};
+
+#define ALL_MEDIA_DENSITY      0
+#define CURRENT_MEDIA_DENSITY  1
+
+#define TC_MAX_DENSITY_REPORTS (8)
+
+struct tc_density_code {
+	unsigned char primary;
+	unsigned char secondary;
+};
+
+struct tc_density_report {
+	int size;
+	struct tc_density_code density[TC_MAX_DENSITY_REPORTS];
 };
 
 #define TEST_CRYPTO (0x20)
@@ -231,12 +254,13 @@ typedef enum {
 #define TC_MAM_TEXT_LOCALIZATION_IDENTIFIER_SIZE (0x1)
 #define TC_MAM_BARCODE (0x0806)
 #define TC_MAM_BARCODE_SIZE (0x20)
+#define TC_MAM_BARCODE_LEN TC_MAM_BARCODE_SIZE /* HPE LTFS alias */
 #define TC_MAM_MEDIA_POOL (0x0808)
 #define TC_MAM_MEDIA_POOL_SIZE (0xA0)
 #define TC_MAM_APP_FORMAT_VERSION (0x080B)
 #define TC_MAM_APP_FORMAT_VERSION_SIZE (0x10)
-#define TC_MAM_VOLUME_LOCKED (0x1623)
-#define TC_MAM_VOLUME_LOCKED_SIZE (0x1)
+#define TC_MAM_LOCKED_MAM (0x1623)
+#define TC_MAM_LOCKED_MAM_SIZE (0x1)
 
 #define BINARY_FORMAT (0x0)
 #define ASCII_FORMAT (0x1)
@@ -244,6 +268,9 @@ typedef enum {
 
 #define TEXT_LOCALIZATION_IDENTIFIER_ASCII (0x0)
 #define TEXT_LOCALIZATION_IDENTIFIER_UTF8 (0x81)
+
+#define TC_MAM_PAGE_ATTRIBUTE_ALL   0 /* Page code for all the attribute passed
+while formatting and mounting the volume */
 
 enum eod_status {
 	EOD_GOOD        = 0x00,
@@ -259,6 +286,9 @@ enum {
 	MEDIUM_READONLY,
 	MEDIUM_CANNOT_ACCESS
 };
+
+/* Forward definition */
+typedef enum mam_advisory_lock_status mam_lockval;
 
 /* Structure of tape operations */
 struct tape_ops {
@@ -539,9 +569,13 @@ struct tape_ops {
 	 * @param format Type of format to perform. Currently libltfs uses the following values.
 	 *               TC_FORMAT_DEFAULT: create a single partition on the medium.
 	 *               TC_FORMAT_DEST_PART: create two partitions on the medium.
+	 * @param vol_name Volume name, unused by libtlfs (HPE extension)
+	 * @param vol_name Volume barcode, unused by libtlfs (HPE extension)
+	 * @param vol_mam_uuid Volume UUID, unused by libtlfs (HPE extension)
 	 * @return 0 on success or a negative value on error.
 	 */
-	int   (*format)(void *device, TC_FORMAT_TYPE format);
+	int   (*format)(void *device, TC_FORMAT_TYPE format, const char *vol_name, const char *barcode_name, const char *vol_mam_uuid);
+
 
 	/**
 	 * Get capacity data from a device.
@@ -575,8 +609,8 @@ struct tape_ops {
 	 * @param subpage Subpage of the specified mode page.
 	 * @param buf On success, the backend must fill this buffer with the mode page's value.
 	 * @param size Buffer size.
-	 * @return 0 on success or a negative value on error. Backends for which Mode Sense is
-	 *         meaningless should zero out the buffer and return 0.
+	 * @return positive value or 0 on success or a negative value on error. Backend can return 0
+	 *         on success or positive value on success as transfered length.
 	 */
 	int   (*modesense)(void *device, const uint8_t page, const TC_MP_PC_TYPE pc, const uint8_t subpage, unsigned char *buf, const size_t size);
 
@@ -740,7 +774,7 @@ struct tape_ops {
 	 *                    parameters.
 	 * @return 0 on success or a negative value on error.
 	 */
-	int   (*get_parameters)(void *device, struct tc_current_param *params);
+	int   (*get_parameters)(void *device, struct tc_drive_param *params);
 
 	/**
 	 * Get EOD status of a partition.
@@ -769,8 +803,9 @@ struct tape_ops {
 	 * Print a help message for the backend.
 	 * This function should print options specific to the backend. For example, the IBM
 	 * backends print their default device names.
+	 * @param progname The program name
 	 */
-	void  (*help_message)(void);
+	void  (*help_message)(const char *progname);
 
 	/**
 	 * Parse backend-specific options.
@@ -854,6 +889,15 @@ struct tape_ops {
 	 * @return 0 on success or a negative value on error
 	 */
 	int   (*get_serialnumber)(void *device, char **result);
+
+	/**
+	 * Get the tape device's information
+	 * This function must not issue any scsi command to the device.
+	 * @param device a pointer to the tape device
+	 * @param[out] info On success, contains device information.
+	 * @return 0 on success or a negative value on error
+	 */
+	int   (*get_info)(void *device, struct tc_drive_info *info);
 
 	/**
 	 * Enable profiler function

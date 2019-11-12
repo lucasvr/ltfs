@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -71,6 +71,19 @@ uint32_t ltfs_get_thread_id(void)
 	uint32_t tid;
 
 	tid = (uint32_t)pthread_getthreadid_np();
+
+	return tid;
+}
+
+#elif defined(__NetBSD__)
+
+#include <pthread.h>
+
+uint32_t ltfs_get_thread_id(void)
+{
+	uint32_t tid;
+
+	tid = (uint32_t)pthread_self();
 
 	return tid;
 }

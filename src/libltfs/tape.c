@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -329,11 +329,38 @@ void tape_device_close_raw(struct device_data *device)
  * @return 0 on success, indicating that the device is connected to the host,
  *  or a negative value on error.
  */
-int tape_device_is_connected(const char *devname, struct tape_ops *ops)
+int tape_device_is_connected(struct device_data *dev, struct tape_ops *ops)
 {
-	CHECK_ARG_NULL(devname, -LTFS_NULL_ARG);
+	int ret;
+	struct tc_drive_info info;
+
+	CHECK_ARG_NULL(dev, -LTFS_NULL_ARG);
 	CHECK_ARG_NULL(ops, -LTFS_NULL_ARG);
-	return ops->is_connected(devname);
+
+	ret = dev->backend->get_info(dev->backend_data, &info);
+	if (!ret) {
+		ret = ops->is_connected(info.name);
+	}
+
+	return ret;
+}
+
+/**
+ * get current device information
+ * @param devname device to get info
+ * @param info buffer to store the data
+ * @return 0 on success, or a negative value on error.
+ */
+int tape_get_info(struct device_data *dev, struct tc_drive_info *info)
+{
+	int ret;
+
+	CHECK_ARG_NULL(dev, -LTFS_NULL_ARG);
+	CHECK_ARG_NULL(info, -LTFS_NULL_ARG);
+
+	ret = dev->backend->get_info(dev->backend_data, info);
+
+	return ret;
 }
 
 /**
@@ -344,7 +371,7 @@ int tape_device_is_connected(const char *devname, struct tape_ops *ops)
 int tape_load_tape(struct device_data *dev, void * const kmi_handle, bool force)
 {
 	int ret;
-	struct tc_current_param param;
+	struct tc_drive_param param;
 	struct tc_remaining_cap cap;
 	uint16_t pews;
 
@@ -425,15 +452,18 @@ int tape_load_tape(struct device_data *dev, void * const kmi_handle, bool force)
 
 	/* Get programmable early warning size */
 	ret = tape_get_pews(dev, &pews);
-	if (ret < 0) {
+	if (ret < 0 && ret != -LTFS_UNSUPPORTED) {
 		ltfsmsg(LTFS_ERR, 17105E, ret);
 		return ret;
 	}
 	pews += 10; /* 10MB is extra space not to miss PEW */
 
 	/* Update read only flags */
-	dev->write_protected = param.write_protected;
 	ltfs_mutex_lock(&dev->read_only_flag_mutex);
+	if (param.write_protect || param.logical_write_protect)
+		dev->write_protected = true;
+	else
+		dev->write_protected = false;
 	dev->write_error = false;
 	if (cap.max_p0 && cap.max_p1 && !cap.remaining_p0)
 		dev->partition_space[0] = PART_NO_SPACE;
@@ -835,7 +865,7 @@ int tape_seek_append_position(struct device_data *dev, tape_partition_t prt, boo
  * @param param pointer of current tape drive and tape parameter
  * @return 0 on success or a negative value on error
  */
-int tape_get_params(struct device_data *dev, struct tc_current_param *param)
+int tape_get_params(struct device_data *dev, struct tc_drive_param *param)
 {
 	int ret;
 
@@ -859,7 +889,7 @@ int tape_get_params(struct device_data *dev, struct tc_current_param *param)
 int tape_get_max_blocksize(struct device_data *dev, unsigned int *size)
 {
 	int ret;
-	struct tc_current_param param;
+	struct tc_drive_param param;
 
 	CHECK_ARG_NULL(size, -LTFS_NULL_ARG);
 
@@ -911,7 +941,7 @@ int tape_read_only(struct device_data *dev, tape_partition_t partition)
 
 	if (!ret) {
 		if (dev->backend->is_readonly(dev->backend_data))
-			ret = -LTFS_RDONLY_CART_DRV;
+			ret = -LTFS_RDONLY_DEN_DRV;
 	}
 
 	return ret;
@@ -1432,17 +1462,14 @@ int tape_format(struct device_data *dev, tape_partition_t index_part, int densit
 	/* Issue Mode Sense (MP x11) */
 	memset(mp_medium_partition, 0, TC_MP_MEDIUM_PARTITION_SIZE+4);
 	ret = dev->backend->modesense(dev->backend_data, TC_MP_MEDIUM_PARTITION, TC_MP_PC_CURRENT, 0x00,
-		mp_medium_partition, TC_MP_MEDIUM_PARTITION_SIZE);
+								  mp_medium_partition, TC_MP_MEDIUM_PARTITION_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 12051E, ret);
 		return ret;
 	}
 
 	if (density_code) {
-		if (mp_medium_partition[2]!=TC_MP_JB && mp_medium_partition[2]!=TC_MP_JC && mp_medium_partition[2]!=TC_MP_JD
-			&& mp_medium_partition[2]!=TC_MP_JK && mp_medium_partition[2]!=TC_MP_JL
-			&& mp_medium_partition[2]!=TC_MP_JY && mp_medium_partition[2]!=TC_MP_JZ
-			&& mp_medium_partition[2]!=TC_MP_LTO7D_CART){
+		if (!IS_REFORMATTABLE_TAPE(mp_medium_partition[2])) {
 			ltfsmsg(LTFS_ERR, 17239E, "unsupported cartridge", mp_medium_partition[2]);
 			return -LTFS_OP_NOT_ALLOWED;
 		}
@@ -1458,7 +1485,7 @@ int tape_format(struct device_data *dev, tape_partition_t index_part, int densit
 	mp_medium_partition[1]  = 0x00;
 	mp_medium_partition[19] = 0x01;
 	mp_medium_partition[20] = 0x20 | (mp_medium_partition[20] & 0x1F); /* Set FDP=0, SDP=0, IDP=1 ==> User Setting */
-	mp_medium_partition[22] = 0x00;
+	mp_medium_partition[22] = 0x09; /* Set partition unit as gigabytes (10^9) */
 	if (index_part == 1) {
 		mp_medium_partition[24] = 0xFF; /* Set Partition0 Capacity */
 		mp_medium_partition[25] = 0xFF;
@@ -1486,7 +1513,7 @@ int tape_format(struct device_data *dev, tape_partition_t index_part, int densit
 		);
 
 	/* Issue Format Medium (destroy all medium data and make 2-partitition medium) */
-	ret = dev->backend->format(dev->backend_data, TC_FORMAT_DEST_PART);
+	ret = dev->backend->format(dev->backend_data, TC_FORMAT_DEST_PART, NULL, NULL, NULL);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 12053E, ret);
 		return ret;
@@ -1518,7 +1545,7 @@ int tape_unformat(struct device_data *dev)
 	}
 
 	/* Issue Format Medium */
-	ret = dev->backend->format(dev->backend_data, TC_FORMAT_DEFAULT);
+	ret = dev->backend->format(dev->backend_data, TC_FORMAT_DEFAULT, NULL, NULL, NULL);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 12055E, ret);
 		return ret;
@@ -1677,14 +1704,14 @@ int tape_set_cart_coherency(struct device_data *dev, const tape_partition_t part
 int tape_get_cart_volume_lock_status(struct device_data *dev, int *status)
 {
 	int ret;
-	unsigned char attr_data[TC_MAM_VOLUME_LOCKED_SIZE + TC_MAM_PAGE_HEADER_SIZE];
+	unsigned char attr_data[TC_MAM_LOCKED_MAM_SIZE + TC_MAM_PAGE_HEADER_SIZE];
 
 	CHECK_ARG_NULL(dev, -LTFS_NULL_ARG);
 	CHECK_ARG_NULL(status, -LTFS_NULL_ARG);
 
 	ret = dev->backend->read_attribute(dev->backend_data,
 									   0,					/* partition */
-									   TC_MAM_VOLUME_LOCKED,
+									   TC_MAM_LOCKED_MAM,
 									   attr_data,
 									   sizeof(attr_data));
 
@@ -1692,11 +1719,11 @@ int tape_get_cart_volume_lock_status(struct device_data *dev, int *status)
 		uint16_t id = ltfs_betou16(attr_data);
 		uint16_t len = ltfs_betou16(attr_data + 3);
 
-		if (id != TC_MAM_VOLUME_LOCKED) {
+		if (id != TC_MAM_LOCKED_MAM) {
 			ltfsmsg(LTFS_WARN, 17196W, id);
 			return -LTFS_UNEXPECTED_VALUE;
 		}
-		if (len != TC_MAM_VOLUME_LOCKED_SIZE) {
+		if (len != TC_MAM_LOCKED_MAM_SIZE) {
 			ltfsmsg(LTFS_WARN, 17197W, len);
 			return -LTFS_UNEXPECTED_VALUE;
 		}
@@ -1706,47 +1733,46 @@ int tape_get_cart_volume_lock_status(struct device_data *dev, int *status)
 
 	} else if (ret == -EDEV_INVALID_FIELD_CDB) {
 		ltfsmsg(LTFS_INFO, 11336I);
-		*status = VOLUME_UNLOCKED;
+		*status = UNLOCKED_MAM;
 		ret = 0;
 	} else
-		ltfsmsg(LTFS_DEBUG, 17198D, TC_MAM_VOLUME_LOCKED, "tape_get_cart_volume_lock_status");
+		ltfsmsg(LTFS_DEBUG, 17198D, TC_MAM_LOCKED_MAM, "tape_get_cart_volume_lock_status");
 
 	return ret;
 }
 
 int tape_set_cart_volume_lock_status(struct ltfs_volume *vol, int status)
 {
-	int ret, cur_stat;
-	char value[TC_MAM_VOLUME_LOCKED_SIZE+1];
+	int ret, cur_stat = -1;
+	char value[TC_MAM_LOCKED_MAM_SIZE];
 
 	tape_get_cart_volume_lock_status(vol->device, &cur_stat);
 
 	if (cur_stat == status) {
 		/* Nothing to do because of same status */
 		return 0;
-	} else if (cur_stat == VOLUME_PERM_LOCKED) {
+	} else if (cur_stat == PERMLOCKED_MAM) {
 		/* perm locked cartridge cannot be updated */
-		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_VOLUME_LOCKED, "tape_set_cart_volume_lock_status : perm locked");
+		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_LOCKED_MAM, "tape_set_cart_volume_lock_status : perm locked");
 		return -LTFS_UNEXPECTED_VALUE;
-	} else if (status > VOLUME_WRITE_PERM_BOTH) {
+	} else if (status > PWE_MAM_BOTH) {
 		/* invalid status */
-		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_VOLUME_LOCKED, "tape_set_cart_volume_lock_status : invalid stat");
+		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_LOCKED_MAM, "tape_set_cart_volume_lock_status : invalid stat");
 		return -LTFS_UNEXPECTED_VALUE;
 	}
 
 	value[0] = status;
-	value[1] = '\0';
 
 	/* update CM MAM attribute */
-	ret = update_tape_attribute(vol, value, TC_MAM_VOLUME_LOCKED, TC_MAM_VOLUME_LOCKED_SIZE);
+	ret = update_tape_attribute(vol, value, TC_MAM_LOCKED_MAM, TC_MAM_LOCKED_MAM_SIZE);
 	if (ret < 0) {
-		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_VOLUME_LOCKED, "tape_set_cart_volume_lock_status");
+		ltfsmsg(LTFS_WARN, 17199W, TC_MAM_LOCKED_MAM, "tape_set_cart_volume_lock_status");
 		return ret;
 	}
 
 	switch (status) {
-		case VOLUME_LOCKED:
-		case VOLUME_PERM_LOCKED:
+		case LOCKED_MAM:
+		case PERMLOCKED_MAM:
 			vol->index->vollock = status;
 			break;
 	}
@@ -2002,9 +2028,10 @@ int tape_get_device_list(struct tape_ops *ops, struct tc_drive_info *buf, int co
 
 /**
  * Print the backend's LTFS help message.
+ * @param prognamme the program name
  * @param ops tape operations for the backend
  */
-void tape_print_help_message(struct tape_ops *ops)
+void tape_print_help_message(const char *progname, struct tape_ops *ops)
 {
 	if (! ops) {
 		ltfsmsg(LTFS_WARN, 10006W, "ops", __FUNCTION__);
@@ -2012,7 +2039,7 @@ void tape_print_help_message(struct tape_ops *ops)
 	}
 
 	if (ops->help_message)
-		ops->help_message();
+		ops->help_message(progname);
 }
 
 int tape_parse_opts(struct device_data *dev, void *opt_args)
@@ -2317,10 +2344,15 @@ int tape_set_pews(struct device_data *dev, bool set_value)
 	/* Issue Mode Sense (MP x10.01) */
 	memset(mp_dev_config_ext, 0, TC_MP_DEV_CONFIG_EXT_SIZE);
 	ret = dev->backend->modesense(dev->backend_data, TC_MP_DEV_CONFIG_EXT, TC_MP_PC_CURRENT, 0x01,
-		mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
+								  mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 17102E, ret);
 		return ret;
+	}
+
+	if (ret && ret != TC_MP_DEV_CONFIG_EXT_SIZE) {
+		/* MP x10.01 has unexpected length. Cannot set PEW but return good */
+		return 0;
 	}
 
 	/* Set appropriate values to the page and Issue Mode Select */
@@ -2330,15 +2362,10 @@ int tape_set_pews(struct device_data *dev, bool set_value)
 	mp_dev_config_ext[22]  = (uint8_t)(pews >> 8 & 0xFF);
 	mp_dev_config_ext[23]  = (uint8_t)(pews      & 0xFF);
 
-	ret = dev->backend->modeselect(
-		dev->backend_data,
-		mp_dev_config_ext,
-		TC_MP_DEV_CONFIG_EXT_SIZE
-		);
-
+	ret = dev->backend->modeselect(dev->backend_data, mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0)
 		ltfsmsg(LTFS_ERR, 17103E, ret);
-	return ret;
+	return 0;
 }
 
 /**
@@ -2360,13 +2387,22 @@ int tape_get_pews(struct device_data *dev, uint16_t *pews)
 	/* Issue Mode Sense (MP x10.01) */
 	memset(mp_dev_config_ext, 0, TC_MP_DEV_CONFIG_EXT_SIZE);
 	ret = dev->backend->modesense(dev->backend_data, TC_MP_DEV_CONFIG_EXT, TC_MP_PC_CURRENT, 0x01,
-		mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
+								  mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 17104E, ret);
 		return ret;
 	}
 
+	if (ret && ret != TC_MP_DEV_CONFIG_EXT_SIZE) {
+		/*
+		 * Return error when modesense returns length
+		 * and it's not matched to the requested length
+		 */
+		return -LTFS_UNSUPPORTED;
+	}
+
 	*pews = mp_dev_config_ext[22] << 8 | mp_dev_config_ext[23];
+
 	return 0;
 }
 
@@ -2397,10 +2433,15 @@ int tape_enable_append_only_mode(struct device_data *dev, bool enable)
 	/* Issue Mode Sense (MP x10.01) */
 	memset(mp_dev_config_ext, 0, TC_MP_DEV_CONFIG_EXT_SIZE);
 	ret = dev->backend->modesense(dev->backend_data, TC_MP_DEV_CONFIG_EXT, TC_MP_PC_CURRENT, 0x01,
-		mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
+								  mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 17154E, ret);
 		return ret;
+	}
+
+	if (ret && ret != TC_MP_DEV_CONFIG_EXT_SIZE) {
+		/* MP x10.01 has unexpected length. Cannot set append only mode */
+		return 0;
 	}
 
 	/* If cartridge is loaded and append-only mode is to be disabled,
@@ -2431,10 +2472,7 @@ int tape_enable_append_only_mode(struct device_data *dev, bool enable)
 	mp_dev_config_ext[21] &= 0x0F;
 	mp_dev_config_ext[21] |= enable ? 0x10 : 0x00;
 
-	ret = dev->backend->modeselect(
-		dev->backend_data,
-		mp_dev_config_ext,
-		TC_MP_DEV_CONFIG_EXT_SIZE);
+	ret = dev->backend->modeselect(dev->backend_data, mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 17155E, ret);
 		return ret;
@@ -2472,13 +2510,19 @@ int tape_get_append_only_mode_setting(struct device_data *dev, bool *enabled)
 	/* Issue Mode Sense (MP x10.01) */
 	memset(mp_dev_config_ext, 0, TC_MP_DEV_CONFIG_EXT_SIZE);
 	ret = dev->backend->modesense(dev->backend_data, TC_MP_DEV_CONFIG_EXT, TC_MP_PC_CURRENT, 0x01,
-		mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
+								  mp_dev_config_ext, TC_MP_DEV_CONFIG_EXT_SIZE);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 17156E, ret);
 		return ret;
 	}
 
-	*enabled = (mp_dev_config_ext[21] >> 4) & 0x0F ? true : false;
+	if (ret && ret != TC_MP_DEV_CONFIG_EXT_SIZE) {
+		/* MP x10.01 has unexpected length. append only mode is not supported */
+		*enabled = false;
+	} else {
+		*enabled = (mp_dev_config_ext[21] >> 4) & 0x0F ? true : false;
+	}
+
 	dev->append_only_mode = *enabled;
 	return 0;
 }
@@ -2668,97 +2712,97 @@ int tape_takedump_drive(struct device_data *dev, bool nonforced_dump)
 	return dev->backend->takedump_drive(dev->backend_data, nonforced_dump);
 }
 
-const char *tape_get_media_encrypted(struct device_data *dev)
+#define CRYPTO_STATUS         (24)
+#define MEDIUM_SUPPORT_CRYPTO (0x01)
+
+char* tape_get_media_encrypted(struct device_data *dev)
 {
 	unsigned char buf[TC_MP_READ_WRITE_CTRL_SIZE] = {0};
-	const int rc = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT, 0,
-		buf, sizeof(buf));
+	int ret = -EDEV_UNKNOWN;
+	char *encrypted = NULL;
 
-	const char *encrypted = NULL;
-
-	if (rc != 0)
+	ret = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT,
+								  0, buf, sizeof(buf));
+	if (ret < 0)
 		encrypted = "unknown";
-	else {
-		static const int encryption_status_1 = 24;
-		static const int medium_supports_encrypted_data = 0x01;
-
-		encrypted = (buf[16 + encryption_status_1] & medium_supports_encrypted_data) == 0 ? "false" : "true";
-	}
+	else
+		encrypted = (buf[16 + CRYPTO_STATUS] & MEDIUM_SUPPORT_CRYPTO) == 0 ? "false" : "true";
 
 	return encrypted;
 }
 
-const char *tape_get_drive_encryption_state(struct device_data *dev)
+#define CRYPTO_CONTROL        (20)
+#define CRYPTO_STATE_MASK     (0x03)
+
+char *tape_get_drive_encryption_state(struct device_data *dev)
 {
 	unsigned char buf[TC_MP_READ_WRITE_CTRL_SIZE] = {0};
-	const int rc = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT, 0,
-		buf, sizeof(buf));
+	int ret = -EDEV_UNKNOWN;
+	char *state = NULL;
 
-	const char *state = NULL;
-
-	if (rc != 0)
+	ret = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT,
+								  0, buf, sizeof(buf));
+	if (ret < 0)
 		state = "unknown";
 	else {
-		static const int encryption_control_1 = 20;
-		static const int encryption_state = 0x03;
-
-		switch ((buf[16 + encryption_control_1] & encryption_state)) {
-		case 0x00:
-			state = "off";
-			break;
-		case 0x01:
-			state = "on";
-			break;
-		case 0x02:
-			state = "unknown";
-			break;
-		case 0x03:
-			state = "on";
-			break;
+		switch ((buf[16 + CRYPTO_CONTROL] & CRYPTO_STATE_MASK)) {
+			case 0x00:
+				state = "off";
+				break;
+			case 0x01:
+				state = "on";
+				break;
+			case 0x02:
+				state = "unknown";
+				break;
+			case 0x03:
+				state = "on";
+				break;
 		}
 	}
 
 	return state;
 }
 
-const char *tape_get_drive_encryption_method(struct device_data *dev)
+char *tape_get_drive_encryption_method(struct device_data *dev)
 {
 	unsigned char buf[TC_MP_READ_WRITE_CTRL_SIZE] = {0};
-	const int rc = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT, 0,
-		buf, sizeof(buf));
+	int ret = -EDEV_UNKNOWN;
+	unsigned char encryption_method = 0;
+	char *method = NULL;
 
-	const char *method = NULL;
-
-	if (rc != 0)
+	ret = dev->backend->modesense(dev->backend_data, TC_MP_READ_WRITE_CTRL, TC_MP_PC_CURRENT,
+								  0, buf, sizeof(buf));
+	if (ret< 0)
 		method = "Unknown";
 	else {
-		const unsigned char encryption_method = buf[16 + 27];
+		encryption_method = buf[16 + 27];
 
 		switch (encryption_method) {
-		case 0x00:
-			method = "No Method";
+			case 0x00:
+				method = "No Method";
+				break;
+			case 0x10:
+				method = "System Managed";
 			break;
-		case 0x10:
-			method = "System Managed";
-			break;
-		case 0x1F:
-			method = "Controller Managed";
-			break;
-		case 0x50:
-			method = "Application Managed";
-			break;
-		case 0x60:
-			method = "Library Managed";
-			break;
-		case 0x70:
-			method = "Internal";
-			break;
-		case 0xFF:
-			method = "Custom";
-			break;
-		default:
-			method = "Unknown";
-			break;
+			case 0x1F:
+				method = "Controller Managed";
+				break;
+			case 0x50:
+				method = "Application Managed";
+				break;
+			case 0x60:
+				method = "Library Managed";
+				break;
+			case 0x70:
+				method = "Internal";
+				break;
+			case 0xFF:
+				method = "Custom";
+				break;
+			default:
+				method = "Unknown";
+				break;
 		}
 	}
 
@@ -2880,7 +2924,7 @@ void set_tape_attribute(struct ltfs_volume *vol, struct tape_attr *t_attr)
 	parse_vol(t_attr->app_format_ver, strlen(LTFS_INDEX_VERSION_STR), TC_MAM_APP_FORMAT_VERSION_SIZE);
 
 	/* VOLUME LOCKED set */
-	t_attr->vollock = VOLUME_UNLOCKED;
+	t_attr->vollock = UNLOCKED_MAM;
 
 	/* MEDIA POOL set */
 	memset(t_attr->media_pool, '\0', TC_MAM_MEDIA_POOL_SIZE + 1);
@@ -2926,8 +2970,8 @@ int tape_set_attribute_to_cm(struct device_data *dev, struct tape_attr *t_attr, 
 	} else if ( type == TC_MAM_APP_FORMAT_VERSION ) {
 		attr_size = TC_MAM_APP_FORMAT_VERSION_SIZE;
 		format = ASCII_FORMAT;
-	} else if ( type == TC_MAM_VOLUME_LOCKED ) {
-		attr_size = TC_MAM_VOLUME_LOCKED_SIZE;
+	} else if ( type == TC_MAM_LOCKED_MAM ) {
+		attr_size = TC_MAM_LOCKED_MAM_SIZE;
 		format = BINARY_FORMAT;
 	} else if ( type == TC_MAM_MEDIA_POOL ) {
 		attr_size = TC_MAM_MEDIA_POOL_SIZE;
@@ -2958,7 +3002,7 @@ int tape_set_attribute_to_cm(struct device_data *dev, struct tape_attr *t_attr, 
 		strncpy((char *)attr_data + 5, t_attr->barcode, attr_size);
 	} else if ( type == TC_MAM_APP_FORMAT_VERSION ) {
 		strncpy((char *)attr_data + 5, t_attr->app_format_ver, attr_size);
-	} else if ( type == TC_MAM_VOLUME_LOCKED ) {
+	} else if ( type == TC_MAM_LOCKED_MAM ) {
 		attr_data[5] =  t_attr->vollock;
 	} else if ( type == TC_MAM_MEDIA_POOL) {
 		strncpy((char *)attr_data + 5, t_attr->media_pool, attr_size);
@@ -3025,7 +3069,7 @@ int tape_format_attribute_to_cm(struct device_data *dev, struct tape_attr *t_att
 		ret_save = ret;
 
 	/* VOLUME LOCKED set */
-	ret = tape_set_attribute_to_cm(dev, t_attr, TC_MAM_VOLUME_LOCKED);
+	ret = tape_set_attribute_to_cm(dev, t_attr, TC_MAM_LOCKED_MAM);
 	if (ret < 0)
 		ret_save = ret;
 
@@ -3077,8 +3121,8 @@ int tape_get_attribute_from_cm(struct device_data *dev, struct tape_attr *t_attr
 	case TC_MAM_APP_FORMAT_VERSION:
 		attr_len = TC_MAM_APP_FORMAT_VERSION_SIZE;
 		break;
-	case TC_MAM_VOLUME_LOCKED:
-		attr_len = TC_MAM_VOLUME_LOCKED_SIZE;
+	case TC_MAM_LOCKED_MAM:
+		attr_len = TC_MAM_LOCKED_MAM_SIZE;
 		break;
 	case TC_MAM_MEDIA_POOL:
 		attr_len = TC_MAM_MEDIA_POOL_SIZE;
@@ -3130,7 +3174,7 @@ int tape_get_attribute_from_cm(struct device_data *dev, struct tape_attr *t_attr
 		} else if (type == TC_MAM_APP_FORMAT_VERSION) {
 			memcpy(t_attr->app_format_ver, attr_data + 5, attr_len);
 			t_attr->app_format_ver[attr_len] = '\0';
-		} else if (type == TC_MAM_VOLUME_LOCKED) {
+		} else if (type == TC_MAM_LOCKED_MAM) {
 			t_attr->vollock = attr_data[5];
 		} else if (type == TC_MAM_MEDIA_POOL) {
 			memcpy(t_attr->media_pool, attr_data + 5, attr_len);
@@ -3198,7 +3242,7 @@ void tape_load_all_attribute_from_cm(struct device_data *dev, struct tape_attr *
 		t_attr->app_format_ver[0] = '\0';
 
 	/* get VOLUME LOCKED */
-	ret = tape_get_attribute_from_cm(dev, t_attr, TC_MAM_VOLUME_LOCKED);
+	ret = tape_get_attribute_from_cm(dev, t_attr, TC_MAM_LOCKED_MAM);
 	if (ret < 0)
 		t_attr->vollock = '\0';
 
@@ -3237,7 +3281,7 @@ int update_tape_attribute(struct ltfs_volume *vol, const char *new_value, int ty
 
 	/* type check */
 	if (type != TC_MAM_USER_MEDIUM_LABEL && type != TC_MAM_BARCODE
-	 && type != TC_MAM_VOLUME_LOCKED && type != TC_MAM_MEDIA_POOL) {
+	 && type != TC_MAM_LOCKED_MAM && type != TC_MAM_MEDIA_POOL) {
 		ltfsmsg(LTFS_WARN, 17204W, type, "update_tape_attribute");
 		return -1;
 	}
@@ -3280,9 +3324,9 @@ int update_tape_attribute(struct ltfs_volume *vol, const char *new_value, int ty
 			strncpy(vol->t_attr->barcode, new_value, size);
 		}
 		parse_vol(vol->t_attr->barcode, strlen(new_value), TC_MAM_BARCODE_SIZE);
-	} else if (type == TC_MAM_VOLUME_LOCKED) {
-		if ( size > TC_MAM_VOLUME_LOCKED_SIZE) {
-			ltfsmsg(LTFS_WARN, 17226W, "VOLLOCK", TC_MAM_VOLUME_LOCKED_SIZE);
+	} else if (type == TC_MAM_LOCKED_MAM) {
+		if ( size > TC_MAM_LOCKED_MAM_SIZE) {
+			ltfsmsg(LTFS_WARN, 17226W, "VOLLOCK", TC_MAM_LOCKED_MAM_SIZE);
 			return -LTFS_LARGE_XATTR;
 		}
 
@@ -3390,6 +3434,27 @@ int tape_is_mountable(struct device_data *dev, char *barcode,
 	CHECK_ARG_NULL(dev->backend, -LTFS_NULL_ARG);
 
 	ret = (*(dev->backend->is_mountable))(dev->backend_data, barcode,
+										  cart_type, density);
+
+	return ret;
+}
+
+/**
+ * Evaluate the tape can be mountable
+ * @param device a pointer to the tape device
+ * @param cart_type cartridge type in CM
+ * @param density current density code of the tape
+ * @return MEDIUM_ like MEDIUM_PERFECT_MATCH prefix enumerator on success,
+ * 	negative value on error
+ */
+int tape_is_reformattable(struct device_data *dev, unsigned char cart_type, unsigned char density)
+{
+	int ret = MEDIUM_CANNOT_ACCESS;
+
+	CHECK_ARG_NULL(dev, -LTFS_NULL_ARG);
+	CHECK_ARG_NULL(dev->backend, -LTFS_NULL_ARG);
+
+	ret = (*(dev->backend->is_mountable))(dev->backend_data, NULL,
 										  cart_type, density);
 
 	return ret;

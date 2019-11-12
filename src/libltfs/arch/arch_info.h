@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -77,6 +77,11 @@
 #elif defined(__FreeBSD__)
 
 #define BUILD_SYS_FOR "This binary is built for FreeBSD"
+#define BUILD_SYS_GCC __VERSION__
+
+#elif defined(__NetBSD__)
+
+#define BUILD_SYS_FOR "This binary is built for NetBSD"
 #define BUILD_SYS_GCC __VERSION__
 
 #elif defined(mingw_PLATFORM)

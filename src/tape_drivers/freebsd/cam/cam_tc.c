@@ -85,7 +85,7 @@
 #include "crc32c_crc.h"
 
 /*
- * Prototypes for opening the SA (Sequential Access) and pass (Pass Through) 
+ * Prototypes for opening the SA (Sequential Access) and pass (Pass Through)
  * device drivers on FreeBSD
 */
 int open_sa_pass(struct camtape_data *softc, const char *saDeviceName);
@@ -118,13 +118,7 @@ const char *camtape_default_changer_device = "/dev/ch0";
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
-#define THRESHOLD_FORCE_WRITE_NO_WRITE (5)
-
 #define CRC32C_CRC (0x02)
-
-#define DEFAULT_WRITEPERM		(0)
-#define DEFAULT_READPERM		(0)
-#define DEFAULT_ERRORTYPE		(0)
 
 /*
  *  Global values
@@ -260,7 +254,7 @@ int camtape_open(const char *devname, void **handle)
 	 * ret =  camtape_check_lin_tape_version();
 	 * if (ret != DEVICE_GOOD) {
 	 * return ret;
- 	 *  }	
+ 	 *  }
 	 */
 
 	ltfsmsg(LTFS_INFO, 31223I, devname);
@@ -332,6 +326,7 @@ int camtape_open(const char *devname, void **handle)
 
 	softc->loaded = false; /* Assume tape is not loaded until a successful load call. */
 
+	softc->clear_by_pc     = false;
 	softc->force_writeperm = DEFAULT_WRITEPERM;
 	softc->force_readperm  = DEFAULT_READPERM;
 	softc->force_errortype = DEFAULT_ERRORTYPE;
@@ -790,6 +785,7 @@ int camtape_rewind(void *device, struct tc_position *pos)
 		camtape_process_errors(device, rc, msg, "rewind", true);
 	}
 
+	softc->clear_by_pc     = false;
 	softc->force_writeperm = DEFAULT_WRITEPERM;
 	softc->force_readperm  = DEFAULT_READPERM;
 	softc->write_counter = 0;
@@ -824,13 +820,16 @@ int camtape_locate(void *device, struct tc_position dest, struct tc_position *po
 	mtl.block_address_mode = MT_LOCATE_BAM_IMPLICIT;
 	mtl.logical_id = dest.block;
 	mtl.partition = dest.partition;
-	if (pos->partition != dest.partition) { 
+	if (pos->partition != dest.partition) {
 		mtl.flags |= MT_LOCATE_FLAG_CHANGE_PART;
 
-		softc->force_writeperm = DEFAULT_WRITEPERM;
-		softc->force_readperm  = DEFAULT_READPERM;
-		softc->write_counter = 0;
-		softc->read_counter  = 0;
+		if (softc->clear_by_pc) {
+			softc->clear_by_pc     = false;
+			softc->force_writeperm = DEFAULT_WRITEPERM;
+			softc->force_readperm  = DEFAULT_READPERM;
+			softc->write_counter = 0;
+			softc->read_counter  = 0;
+		}
 	}
 
 	rc = ioctl(softc->fd_sa, MTIOCEXTLOCATE, (caddr_t)&mtl);
@@ -838,7 +837,7 @@ int camtape_locate(void *device, struct tc_position dest, struct tc_position *po
 		rc = camtape_ioctlrc2err(softc, softc->fd_sa, &sense_data, /*control_cmd*/ 1, &msg);
 	} else {
 		rc = DEVICE_GOOD;
-	} 	
+	}
 
 	if (rc != DEVICE_GOOD) {
 		if ((unsigned long long)dest.block == TAPE_BLOCK_MAX && rc == -EDEV_EOD_DETECTED) {
@@ -1129,6 +1128,7 @@ int camtape_load(void *device, struct tc_position *pos)
 	softc->loaded = true;
 	softc->is_worm = false;
 
+	softc->clear_by_pc     = false;
 	softc->force_writeperm = DEFAULT_WRITEPERM;
 	softc->force_readperm  = DEFAULT_READPERM;
 	softc->write_counter = 0;
@@ -1167,6 +1167,7 @@ int camtape_unload(void *device, struct tc_position *pos)
 
 	rc = _camtape_load_unload(device, false, pos);
 
+	softc->clear_by_pc     = false;
 	softc->force_writeperm = DEFAULT_WRITEPERM;
 	softc->force_readperm = DEFAULT_READPERM;
 	softc->write_counter = 0;
@@ -1331,7 +1332,7 @@ static int camtape_load_elements(struct mt_status_data *mtinfo, xmlDocPtr doc, x
 				retval = -EDEV_NO_MEMORY;
 				goto bailout;
 			}
-			memset(entry, 0, sizeof(*entry)); 
+			memset(entry, 0, sizeof(*entry));
 			STAILQ_INIT(&entry->nv_list);
 			STAILQ_INIT(&entry->child_entries);
 			entry->entry_name = strdup((char *)xnode->name);
@@ -1591,9 +1592,12 @@ bailout:
  * Make/Unmake partition
  * @param device a pointer to the camtape backend
  * @param format specify type of format
+ * @param vol_name Volume name, unused by libtlfs (HPE extension)
+ * @param vol_name Barcode name, unused by libtlfs (HPE extension)
+ * @param vol_mam_uuid Volume UUID, unused by libtlfs (HPE extension)
  * @return 0 on success or a negative value on error
  */
-int camtape_format(void *device, TC_FORMAT_TYPE format)
+int camtape_format(void *device, TC_FORMAT_TYPE format, const char *vol_name, const char *barcode_name, const char *vol_mam_uuid)
 {
 	int rc, aux_rc;
 	char *msg = NULL;
@@ -2689,7 +2693,7 @@ bailout:
 	return length;
 }
 
-int camtape_get_parameters(void *device, struct tc_current_param *params)
+int camtape_get_parameters(void *device, struct tc_drive_param *params)
 {
 	struct camtape_data *softc = (struct camtape_data *)device;
 	int rc = DEVICE_GOOD;
@@ -2713,11 +2717,11 @@ int camtape_get_parameters(void *device, struct tc_current_param *params)
 	 */
 	if (global_data.crc_checking)
 		params->max_blksize = MIN(_camtape_get_block_limits(device) - 4, LINUX_MAX_BLOCK_SIZE);
-	else 
+	else
 		params->max_blksize = MIN(_camtape_get_block_limits(device), LINUX_MAX_BLOCK_SIZE);
 
 	if (softc->loaded) {
-		params->write_protected = 0;
+		params->write_protect = 0;
 
 		if (IS_ENTERPRISE(softc->drive_type)) {
 			rc = camtape_modesense(device, TC_MP_MEDIUM_SENSE, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
@@ -2729,11 +2733,11 @@ int camtape_get_parameters(void *device, struct tc_current_param *params)
 			char wp_flag = buf[26];
 
 			if (wp_flag & 0x80) {
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 			} else if (wp_flag & 0x01) {
-				params->write_protected |= VOL_PERM_WP;
+				params->write_protect |= VOL_PERM_WP;
 			} else if (wp_flag & 0x10) {
-				params->write_protected |= VOL_PERS_WP;
+				params->write_protect |= VOL_PERS_WP;
 			}
 		} else {
 			rc = camtape_modesense(device, 0x00, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
@@ -2743,7 +2747,7 @@ int camtape_get_parameters(void *device, struct tc_current_param *params)
 			}
 
 			if ( (buf[3] & 0x80) )
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 		}
 
 		params->cart_type = softc->cart_type;
@@ -2804,7 +2808,7 @@ int camtape_get_device_list(struct tc_drive_info *buf, int count)
 	}
 
 	memset(&ccb, 0, sizeof(ccb));
-	
+
 	ccb.ccb_h.path_id = CAM_XPT_PATH_ID;
 	ccb.ccb_h.target_id = CAM_TARGET_WILDCARD;
 	ccb.ccb_h.target_lun = CAM_LUN_WILDCARD;
@@ -2872,6 +2876,10 @@ int camtape_get_device_list(struct tc_drive_info *buf, int count)
 					snprintf(buf[buf_index].model, sizeof(buf[buf_index].model), "%s", product);
 					snprintf(buf[buf_index].product_name, sizeof(buf[buf_index].product_name), "%s",
 						generate_product_name((const char *)product));
+					buf[buf_index].host    = 0;
+					buf[buf_index].channel = 0;
+					buf[buf_index].target  = 0;
+					buf[buf_index].lun     = -1;
 				} else {
 					/*
 					 * XXX KDM what now?  We have a tape device that isn't SCSI??
@@ -2895,13 +2903,17 @@ int camtape_get_device_list(struct tc_drive_info *buf, int count)
 						err(1, "unable to open passthrough "
 						    "device for %s%d",
 						    periph_result->periph_name,
-						    periph_result->unit_number); 
+						    periph_result->unit_number);
 					}
 					dev->serial_num[dev->serial_num_len] = '\0';
 					snprintf(buf[buf_index].serial_number, sizeof(buf[buf_index].serial_number),
 					    "%s", dev->serial_num);
 					snprintf(buf[buf_index].name, sizeof(buf[buf_index].name), "%s%d",
 						periph_result->periph_name, periph_result->unit_number);
+					buf[buf_index].host    = 0;
+					buf[buf_index].channel = 0;
+					buf[buf_index].target  = 0;
+					buf[buf_index].lun     = -1;					
 					cam_close_device(dev);
 				}
 				buf_index++;
@@ -2946,10 +2958,13 @@ int camtape_setcap(void *device, uint16_t proportion)
 
 		/* Scale media instead of setcap */
 		rc = camtape_modesense(device, TC_MP_MEDIUM_SENSE, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
+		if (rc < 0) {
+			ltfs_profiler_add_entry(softc->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETCAP));
+			return rc;
+		}
 
 		/* Check Cartridge type */
-		if (rc == 0 &&
-			(buf[2] == TC_MP_JK || buf[2] == TC_MP_JY || buf[2] == TC_MP_JL || buf[2] == TC_MP_JZ)) {
+		if (IS_SHORT_MEDIUM(buf[2]) || IS_WORM_MEDIUM(buf[2])) {
 			/* Short or WORM cartridge cannot be scaled */
 			ltfs_profiler_add_entry(softc->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETCAP));
 			return DEVICE_GOOD;
@@ -2978,7 +2993,7 @@ int camtape_setcap(void *device, uint16_t proportion)
 			rc = -EDEV_UNSUPPORETD_COMMAND;
 			goto bailout;
 		}
- 
+
 		scsi_set_capacity(&ccb->csio,
 						  /*retries*/ 1,
 						  /*cbfcnp*/ NULL,
@@ -3189,7 +3204,7 @@ int camtape_set_xattr(void *device, const char *name, const char *buf, size_t si
 	return rc;
 }
 
-void camtape_help_message(void)
+void camtape_help_message(const char *progname)
 {
 	ltfsresult(31399I, camtape_default_device);
 }
@@ -3323,7 +3338,7 @@ static int camtape_get_encryption_state(void *device, struct camtape_encryption_
 		es.encryption_method = CT_ENC_METHOD_NONE;
 		es.encryption_state = CT_ENC_STATE_OFF;
 		goto bailout;
-	}	
+	}
 
 	memset(buf, 0, buf_size);
 
@@ -3339,7 +3354,7 @@ static int camtape_get_encryption_state(void *device, struct camtape_encryption_
 		*rwc_fill_len = MIN(buf_size, rwc_buf_len);
 		memcpy(rwc_mode_buf, buf, *rwc_fill_len);
 	}
-	
+
 	mode_hdr = (struct scsi_mode_header_10 *)buf;
 	rwc_page = (struct camtape_ibm_rw_control_page *)find_mode_page_10(mode_hdr);
 
@@ -3491,7 +3506,7 @@ static bool is_ame(struct camtape_data *softc)
 		rwc_page = (struct camtape_ibm_rw_control_page *)find_mode_page_10(mode_hdr);
 
 		method = camtape_enc_method_to_str(rwc_page->encryption_method);
-		
+
 		sprintf(message, "Encryption Method is %s (0x%02X)", method, rwc_page->encryption_method);
 		ltfsmsg(LTFS_DEBUG, 31392D, __FUNCTION__, message);
 
@@ -3533,7 +3548,7 @@ static void camtape_fill_enc_subpage(struct camtape_ibm_enc_param_subpage *enc_s
 	if (key_index_set != 0)
 		subpage_length = CT_ENC_PARAM_KI_EXTRA_LENGTH;
 	else
-		subpage_length = CT_ENC_PARAM_NO_KI_EXTRA_LENGTH;	
+		subpage_length = CT_ENC_PARAM_NO_KI_EXTRA_LENGTH;
 	scsi_ulto2b(subpage_length, enc_sp->page_length);
 
 	enc_sp->desc1[0] = CT_ENC_PARAM_DESC_1_BYTE_0_VAL;
@@ -3687,7 +3702,7 @@ int camtape_get_keyalias(void *device, unsigned char **keyalias) /* This is not 
 	char *msg = NULL;
 	int i, rc = DEVICE_GOOD;
 	int timeout;
-	
+
 	ltfs_profiler_add_entry(softc->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_GETKEYALIAS));
 
 	rc = is_encryption_capable(device);
@@ -3753,7 +3768,7 @@ int camtape_get_keyalias(void *device, unsigned char **keyalias) /* This is not 
 		status_page = (struct tde_next_block_enc_status_page *)buf;
 		buffer_length = page_header_length + scsi_2btoul(status_page->page_length);
 	}
-	
+
 	enc_status = status_page->status & TDE_NBES_ENC_STATUS_MASK;
 	switch (enc_status) {
 	case TDE_NBES_ENC_ALG_NOT_SUPPORTED:
@@ -3818,7 +3833,7 @@ typedef enum {
 	CT_PP_PI_LENGTH,
 	CT_PP_PROT_METHOD
 } ct_protect_param;
-                        
+
 struct ct_protect_info {
 	const char *name;
 	struct mt_status_entry *entry;
@@ -3953,14 +3968,14 @@ int camtape_set_lbp(void *device, bool enable)
 		msg = strdup(tmpstr);
 		rc = -errno;
 		camtape_process_errors(device, rc, msg, "get lbp", true);
-		goto bailout;	
+		goto bailout;
 	}
 
 	for (i = 0; i < CT_NUM_PROTECT_PARAMS; i++) {
 		if (params[i].status != MT_PARAM_STATUS_OK) {
 			rc = -EDEV_DRIVER_ERROR;
 			camtape_process_errors(device, rc, params[i].error_str, "get lbp", true);
-			goto bailout;	
+			goto bailout;
 		}
 	}
 
@@ -3990,12 +4005,12 @@ bailout:
 	return rc;
 }
 
-int camtape_is_mountable(void *device, const char *barcode, const unsigned char cart_type, 
+int camtape_is_mountable(void *device, const char *barcode, const unsigned char cart_type,
 						 const unsigned char density)
 {
 	int ret;
 	struct camtape_data *softc = (struct camtape_data *)device;
-        
+
 	ltfs_profiler_add_entry(softc->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_ISMOUNTABLE));
 
 	ret = ibm_tape_is_mountable(softc->drive_type,
@@ -4005,10 +4020,10 @@ int camtape_is_mountable(void *device, const char *barcode, const unsigned char 
 							   global_data.strict_drive);
 
 	ltfs_profiler_add_entry(softc->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_ISMOUNTABLE));
-        
+
 	return ret;
 }
-        
+
 bool camtape_is_readonly(void *device)
 {
 	int ret;
@@ -4098,6 +4113,7 @@ struct tape_ops camtape_drive_handler = {
 	.is_mountable           = camtape_is_mountable,
 	.get_worm_status		= camtape_get_worm_status,
 	.get_serialnumber		= camtape_get_serialnumber,
+	.get_info               = camtape_get_info,	
 	.set_profiler			= camtape_set_profiler,
 	.get_block_in_buffer	= camtape_get_block_in_buffer,
 	.is_readonly			= camtape_is_readonly
@@ -4117,17 +4133,17 @@ const char *tape_dev_get_message_bundle_name(void **message_data)
 }
 
 /**
- * Given the SA device, opens the SA and Pass Thru devices for 
- * the specified tape drive. 
- *  
+ * Given the SA device, opens the SA and Pass Thru devices for
+ * the specified tape drive.
+ *
  * @author Ryan Guthrie (ryang@spectralogic.com) (5/2/2013)
- * 
- * @param softc the struct containing persistent information. 
+ *
+ * @param softc the struct containing persistent information.
  *  						It is where the file descriptors for the pass
  *  						and SA are stored.
  * @param saDeviceName the SA (Sequential Access) device for the tape driver
- * 
- * @return int 0 on success, or a negative value on error 
+ *
+ * @return int 0 on success, or a negative value on error
  *  			 opening either the SA or PASS devices.
  */
 int open_sa_pass(struct camtape_data *softc, const char *saDeviceName)

@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -208,14 +208,14 @@ static inline ltfs_thread_t ltfs_thread_self(void)
 
 static inline int ltfs_thread_yield(void)
 {
-#if defined (__APPLE__) || defined(__FreeBSD__)
+#if defined (__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
 	return sched_yield();
 #else
 	return pthread_yield();
 #endif
 }
 
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
 extern uint32_t ltfs_get_thread_id(void);
 #else
 static inline uint32_t ltfs_get_thread_id(void)

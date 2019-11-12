@@ -393,6 +393,7 @@ struct camtape_data {
 	uint64_t      tape_alert;        /**< Latched tape alert flag */
 	bool          is_data_key_set;   /**< Is a valid data key set? */
 	unsigned char dki[12];           /**< key-alias */
+	bool          clear_by_pc;       /**< clear pseudo write perm by partition change */
 	uint64_t      force_writeperm;   /**< pseudo write perm threshold */
 	uint64_t      force_readperm;    /**< pseudo read perm threashold */
 	uint64_t      write_counter;     /**< write call counter for pseudo write perm */
@@ -445,6 +446,7 @@ extern int camtape_readbuffer(struct camtape_data *softc, int id, unsigned char 
 							  size_t offset, size_t len, int type);
 extern int camtape_takedump_drive(void *device, bool nonforced_dump);
 extern int camtape_get_serialnumber(void *device, char **result);
+extern int camtape_get_info(void *device, struct tc_drive_info *info);
 extern int camtape_set_profiler(void *device, char *work_dir, bool enable);
 extern int camtape_get_timeout(struct timeout_tape *table, int op_code);
 

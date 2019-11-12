@@ -3,7 +3,7 @@
 ;;  OO_Copyright_BEGIN
 ;;
 ;;
-;;  Copyright 2010, 2018 IBM Corp. All rights reserved.
+;;  Copyright 2010, 2019 IBM Corp. All rights reserved.
 ;;
 ;;  Redistribution and use in source and binary forms, with or without
 ;;   modification, are permitted provided that the following conditions
@@ -36,7 +36,7 @@
 dnl
 dnl LTFS configure.ac.
 dnl
-AC_INIT([LTFS], [2.4.0.1 (10062)], IBM corporation.)
+AC_INIT([LTFS], [2.4.2.0 (Prelim)], IBM corporation.)
 AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIRS([m4])
@@ -58,6 +58,7 @@ dnl
 host_linux=no
 host_mac=no
 host_freebsd=no
+host_netbsd=no
 
 case "${host_os}" in
     linux*)
@@ -68,6 +69,9 @@ case "${host_os}" in
         ;;
     freebsd*)
         host_freebsd=yes
+        ;;
+    netbsd*)
+        host_netbsd=yes
         ;;
     *)
         AC_MSG_ERROR(["OS $host_os is not supported"])
@@ -95,6 +99,17 @@ AC_ARG_ENABLE([message-checker],
     [use_msg_check=no]
 )
 AC_MSG_RESULT([$use_msg_check])
+
+dnl
+dnl Check for warning treatment
+dnl
+AC_MSG_CHECKING([enable warnings as errors])
+AC_ARG_ENABLE([warning-as-error],
+    [AS_HELP_STRING([--enable-warning-as-error],[Treates warnings as errors])],
+    [warning_as_error=$enableval],
+    [warning_as_error=no]
+)
+AC_MSG_RESULT([$warning_as_error])
 
 dnl
 dnl Handle --enable-fast (default:no)
@@ -138,6 +153,26 @@ AC_ARG_ENABLE([snmp],
 AC_MSG_RESULT([$snmp])
 
 dnl
+dnl Handle --enable-new-locking (default: depend on platform)
+dnl NetBSD: old locking is broken, force new locking
+dnl others: default to old locking
+dnl
+if test "x${host_netbsd}" = "xyes"
+then
+    use_new_locking_default=yes
+else
+    use_new_locking_default=no
+fi
+
+AC_MSG_CHECKING([whether to enable new locking system or not])
+AC_ARG_ENABLE([new-locking],
+    [AS_HELP_STRING([--enable-new-locking],[Use new locking system or not])],
+    [use_new_locking=$enableval],
+    [use_new_locking=$use_new_locking_default]
+)
+AC_MSG_RESULT([$use_new_locking])
+
+dnl
 dnl Handle --enable-lin-tape (default:no, Linux Only)
 dnl
 AC_MSG_CHECKING([whether to enable lin_tape or not (Linux Only)])
@@ -149,9 +184,9 @@ AC_ARG_ENABLE([lintape],
 AC_MSG_RESULT([$lintape])
 
 dnl
-dnl Handle --enable-buggy-ifs (default:no, Linux/OSx Only)
+dnl Handle --enable-buggy-ifs (default:no, Linux/MacOS Only)
 dnl
-AC_MSG_CHECKING([whether to enable handling of buggy I/Fs or not (Linux/OSx Only)])
+AC_MSG_CHECKING([whether to enable handling of buggy I/Fs or not (Linux/MacOS Only)])
 AC_ARG_ENABLE([buggy_ifs],
     [AS_HELP_STRING([--enable-buggy-ifs],[Support handling of buggy I/Fs for tape drivers])],
     [buggy_ifs=$enableval],
@@ -167,12 +202,12 @@ then
     if test "x${host_linux}" = "xyes"
     then
         AM_EXTRA_CPPFLAGS="${AM_EXTRA_CPPFLAGS} -DSUPPORT_BUGGY_IFS"
-	AC_ARG_VAR([buggy_ifs], [compile with SUPPORT_BUGGY_IFS enabled])
+        AC_ARG_VAR([buggy_ifs], [compile with SUPPORT_BUGGY_IFS enabled])
     fi
     if test "x${host_mac}" = "xyes"
     then
         AM_EXTRA_CPPFLAGS="${AM_EXTRA_CPPFLAGS} -DSUPPORT_BUGGY_IFS"
-	AC_ARG_VAR([buggy_ifs], [compile with SUPPORT_BUGGY_IFS enabled])
+        AC_ARG_VAR([buggy_ifs], [compile with SUPPORT_BUGGY_IFS enabled])
     fi
 fi
 
@@ -192,6 +227,10 @@ then
     if test "x${host_freebsd}" = "xyes"
     then
         DEFAULT_TAPE=cam
+    fi
+    if test "x${host_netbsd}" = "xyes"
+    then
+        DEFAULT_TAPE=scsipi-ibmtape
     fi
 fi
 
@@ -287,6 +326,16 @@ then
 fi
 
 dnl
+dnl Check for libexecinfo on NetBSD
+dnl
+if test "x${host_netbsd}" = "xyes"
+then
+    AC_CHECK_LIB(execinfo, backtrace,,
+        [AC_MSG_ERROR([required library execinfo missing])])
+
+fi
+
+dnl
 dnl Check for ICU
 dnl
 ICU_MODULE_CFLAGS="`icu-config --cppflags 2> /dev/null`";
@@ -310,7 +359,7 @@ then
     ICU_MODULE_VERSION="`icu-config --version 2> /dev/null`";
     if test "${ICU_MODULE_VERSION%%.*}" -ge "60"
     then
-	AM_EXTRA_CPPFLAGS="${AM_EXTRA_CPPFLAGS} -D ICU6x"
+        AM_EXTRA_CPPFLAGS="${AM_EXTRA_CPPFLAGS} -D ICU6x"
     fi
     AC_MSG_RESULT([$ICU_MODULE_VERSION])
 fi
@@ -432,6 +481,16 @@ then
     AM_CPPFLAGS="${AM_CPPFLAGS} -DMSG_CHECK"
 fi
 
+if test "x$warning_as_error" = "xyes"
+then
+    AM_CFLAGS="${AM_CFLAGS} -Werror"
+fi
+
+if test "x$use_new_locking" = "xyes"
+then
+    AM_CPPFLAGS="${AM_CPPFLAGS} -DUSE_NEW_LOCKING"
+fi
+
 if test "x$livelink" = "xno"
 then
     AM_CPPFLAGS="${AM_CPPFLAGS} -DPOSIXLINK_ONLY"
@@ -523,8 +582,9 @@ AM_CONDITIONAL([PLATFORM_LINUX], [test "x${host_linux}" = "xyes"])
 AM_CONDITIONAL([ENABLE_LIN_TAPE], [test "x${lintape}" = "xyes"])
 AM_CONDITIONAL([PLATFORM_MAC], [test "x${host_mac}" = "xyes"])
 AM_CONDITIONAL([PLATFORM_FREEBSD], [test "x${host_freebsd}" = "xyes"])
-AM_CONDITIONAL([OSS], [true])
+AM_CONDITIONAL([PLATFORM_NETBSD], [test "x${host_netbsd}" = "xyes"])
 AM_CONDITIONAL([CHK_MESSAGE], [test "x${use_msg_check}" = "xyes"])
+AM_CONDITIONAL([OSS], [true])
 
 AC_SUBST(CFLAGS)
 AC_SUBST(CRC_OPTIMIZE)
@@ -551,6 +611,7 @@ AC_CONFIG_FILES([
     src/tape_drivers/linux/sg-ibmtape/Makefile
     src/tape_drivers/osx/iokit-ibmtape/Makefile
     src/tape_drivers/freebsd/cam/Makefile
+    src/tape_drivers/netbsd/scsipi-ibmtape/Makefile
     src/iosched/Makefile
     src/kmi/Makefile
     src/utils/Makefile

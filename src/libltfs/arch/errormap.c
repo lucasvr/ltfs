@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -263,7 +263,9 @@ static struct error_map fuse_error_list[] = {
 	{ LTFS_NO_DMAP_ENTRY,            "I1169E", ENOENT},
 	{ LTFS_RECOVERABLE_FILE_ERR,     "I1170E", EAGAIN},
 	{ LTFS_NO_DCACHE_SPC,            "I1171E", ENOSPC},
-	/* Unused 1175 - 1180 */
+	{ LTFS_POS_SUSPECT_BOP,          "I1172E", EIO},
+	/* Unused 1175 - 1179 */
+	{ LTFS_CACHE_IO,                 "I1180E", EIO },
 	{ LTFS_CACHE_DISCARDED,          "I1181E", ENOENT },
 	{ LTFS_LONG_WRITE_LOCK,          "I1182E", EAGAIN },
 	{ LTFS_INCOMPATIBLE_CACHE,       "I1183E", EINVAL },
@@ -277,7 +279,7 @@ static struct error_map fuse_error_list[] = {
 	{ LTFS_NODE_DEGATE_FAIL,         "I1191E", EIO },
 	{ LTFS_CLUSTER_MRSW_FAIL,        "I1192E", EIO },
 	{ LTFS_CART_NOT_MOUNTED,         "I1193E", EBUSY},
-	{ LTFS_RDONLY_CART_DRV,          "I1194E", EINVAL},
+	{ LTFS_RDONLY_DEN_DRV,           "I1194E", EINVAL},
 	{ LTFS_NEED_DRIVE_SELECTION,     "I1195E", EINVAL},
 	{ LTFS_MUTEX_ALREADY_LOCKED,     "I1196E", EINVAL},
 	{ LTFS_TAPE_UNDER_PROCESS,       "I1197E", EBUSY},
@@ -339,6 +341,7 @@ static struct error_map fuse_error_list[] = {
 	{ EDEV_HARDWARE_ERROR,           "D0400E", EIO},
 	{ EDEV_LBP_WRITE_ERROR,          "D0401E", EIO},
 	{ EDEV_LBP_READ_ERROR,           "D0402E", EIO},
+	{ EDEV_NO_CONNECTION,            "D0403E", EIO},
 	{ EDEV_ILLEGAL_REQUEST,          "D0500E", EILSEQ},
 	{ EDEV_INVALID_FIELD_CDB,        "D0501E", EILSEQ},
 	{ EDEV_DEST_FULL,                "D0502E", EIO},
@@ -369,6 +372,7 @@ static struct error_map fuse_error_list[] = {
 	{ EDEV_ABORTED_COMMAND,          "D1100E", EIO},
 	{ EDEV_OVERLAPPED,               "D1101E", EIO},
 	{ EDEV_TIMEOUT,                  "D1102E", ETIMEDOUT},
+	{ EDEV_ABORT_WAIT_READY,         "D1103E", EIO},
 	{ EDEV_OVERFLOW,                 "D1300E", EIO},
 	{ EDEV_CRYPTO_ERROR,             "D1600E", EIO},
 	{ EDEV_KEY_SERVICE_ERROR,        "D1601E", EIO},
@@ -401,6 +405,8 @@ static struct error_map fuse_error_list[] = {
 	{ EDEV_NO_RESERVATION_HOLDER,    "D1721E", EIO},
 	{ EDEV_NEED_FAILOVER,            "D1722E", EIO},
 	{ EDEV_REAL_POWER_ON_RESET,      "D1723E", EIO},
+	{ EDEV_BUFFER_ALLOCATE_ERROR,    "D1724E", EIO},
+	{ EDEV_RETRY,                    "D1725E", EIO},
 	{ -1, NULL, 0 }
 };
 

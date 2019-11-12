@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -31,42 +31,38 @@
 **
 **
 **  OO_Copyright_END
+**
 *************************************************************************************
 **
 ** COMPONENT NAME:  IBM Linear Tape File System
 **
-** FILE NAME:       ltfsprintf.h
+** FILE NAME:       tape_drivers/open_factor.h
 **
-** DESCRIPTION:     Implements a basic printf based logging function.
-**                  This function should not be used as a permanent logging
-**                  in the LTFS code base unless there is a compelling reason
-**                  to avoid dependency on the official logging framework.
+** DESCRIPTION:     Definitions of handling IBM tape devices
 **
-** AUTHORS:         Michael A. Richmond
-**                  IBM Almaden Research Center
-**                  mar@almaden.ibm.com
+** AUTHOR:          Atsushi Abe
+**                  IBM Tokyo Lab., Japan
+**                  piste@jp.ibm.com
 **
 *************************************************************************************
 */
 
+#ifndef __open_factor_h
 
-#ifndef __ltfs_printf_h
-#define __ltfs_printf_h
+#define __open_factor_h
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <stdio.h>
-
-/* For printing debug messages */
-#define ltfsprintf(fmt, ...)						\
-	do { \
-		fprintf(stderr, "["__FILE__"::%d] "fmt"\n", __LINE__, ##__VA_ARGS__);	\
-	} while(0)
+void init_openfactor(void);
+void destroy_openfactor(void);
+void increment_openfactor(int host, int channel);
+void decrement_openfactor(int host, int channel);
+int get_openfactor(int host, int channel);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __ltfs_printf_h */
+#endif // __open_factor_h

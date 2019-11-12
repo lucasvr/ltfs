@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -105,7 +105,7 @@ int iokit_ibmtape_logsense(void *device, const unsigned char page, unsigned char
 int iokit_ibmtape_modesense(void *device, const unsigned char page, const TC_MP_PC_TYPE pc,
 							const unsigned char subpage, unsigned char *buf, const size_t size);
 int iokit_ibmtape_modeselect(void *device, unsigned char *buf, const size_t size);
-
+static const char *_generate_product_name(const char *product_id);
 
 /* Local functions */
 static inline int _parse_logPage(const unsigned char *logdata,
@@ -719,7 +719,7 @@ int iokit_ibmtape_open(const char *devname, void **handle)
 {
 	char    *end;
 	int     drive_type = DRIVE_UNSUPPORTED;
-	int     ret = -1;
+	int     ret = -1, count = 0, i;
 	int32_t drive_number;
 
 	struct iokit_ibmtape_data *priv;
@@ -744,16 +744,37 @@ int iokit_ibmtape_open(const char *devname, void **handle)
 
 	errno = 0;
 	drive_number = strtoul(devname, &end, 10);
-	if(errno || (*end != '\0')) {
-		ltfsmsg(LTFS_INFO, 30811I, devname);
-		ret = -EDEV_DEVICE_UNOPENABLE;
-		goto free;
-	}
+	if(errno || (*end != '\0') || drive_number > 256) {
+		/* Find the drive by serial number */
+		bool found = false;
+		count = iokit_get_ssc_device_count();
+		for (i = 0; i < count; i++) {
+			ret = iokit_find_ssc_device(&priv->dev, i);
+			if(!ret) {
+				ret = iokit_get_drive_identifier(&priv->dev, &id_data);
+				if (!ret) {
+					if (!strncmp(devname, id_data.unit_serial, strlen(devname))) {
+						found = true;
+						priv->drive_number = i;
+						break;
+					}
+				}
+				iokit_free_device(&priv->dev);
+			}
+		}
 
-	ret = iokit_find_ssc_device(&priv->dev, drive_number);
-	if(ret < 0) {
-		ret = -EDEV_DEVICE_UNOPENABLE;
-		goto free;
+		if (!found) {
+			ltfsmsg(LTFS_INFO, 30811I, devname);
+			ret = -EDEV_DEVICE_UNOPENABLE;
+			goto free;
+		}
+	} else {
+		ret = iokit_find_ssc_device(&priv->dev, drive_number);
+		if(ret < 0) {
+			ret = -EDEV_DEVICE_UNOPENABLE;
+			goto free;
+		}
+		priv->drive_number = drive_number;
 	}
 
 	ret = iokit_obtain_exclusive_access(&priv->dev);
@@ -797,6 +818,17 @@ int iokit_ibmtape_open(const char *devname, void **handle)
 	ltfsmsg(LTFS_INFO, 30816I, id_data.product_rev);
 	ltfsmsg(LTFS_INFO, 30817I, priv->drive_serial);
 
+	snprintf(priv->info.name, TAPE_DEVNAME_LEN_MAX + 1, "%d", drive_number);
+	snprintf(priv->info.vendor, TAPE_VENDOR_NAME_LEN_MAX + 1, "%s", id_data.vendor_id);
+	snprintf(priv->info.model, TAPE_MODEL_NAME_LEN_MAX + 1, "%s", id_data.product_id);
+	snprintf(priv->info.serial_number, TAPE_SERIAL_LEN_MAX + 1, "%s", priv->drive_serial);
+	snprintf(priv->info.product_rev, PRODUCT_REV_LENGTH + 1, "%s", id_data.product_rev);
+	snprintf(priv->info.product_name, PRODUCT_NAME_LENGTH + 1, "%s", _generate_product_name(id_data.product_id));
+	priv->info.host    = 0;
+	priv->info.channel = 0;
+	priv->info.target  = 0;
+	priv->info.lun     = -1;
+
 	/* Setup IBM tape specific parameters */
 	standard_table = standard_tape_errors;
 	vendor_table   = ibm_tape_errors;
@@ -805,6 +837,12 @@ int iokit_ibmtape_open(const char *devname, void **handle)
 	/* Register reservation key */
 	ibm_tape_genkey(priv->key);
 	_register_key(priv, priv->key);
+
+	/* Initial setting of force perm */
+	priv->clear_by_pc     = false;
+	priv->force_writeperm = DEFAULT_WRITEPERM;
+	priv->force_readperm  = DEFAULT_READPERM;
+	priv->force_errortype = DEFAULT_ERRORTYPE;
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_OPEN));
 
@@ -825,7 +863,6 @@ int iokit_ibmtape_reopen(const char *devname, void *device)
 	char    *end;
 	int     drive_type = DRIVE_UNSUPPORTED;
 	int     ret = -EDEV_UNKNOWN;
-	int32_t drive_number;
 
 	CHECK_ARG_NULL(device, -LTFS_NULL_ARG);
 
@@ -836,16 +873,7 @@ int iokit_ibmtape_reopen(const char *devname, void *device)
 
 	ltfsmsg(LTFS_INFO, 30818I, devname);
 
-	errno = 0;
-	drive_number = strtoul(devname, &end, 10);
-	if(errno || (*end != '\0')) {
-		ltfsmsg(LTFS_INFO, 30811I, devname);
-		ret = -EDEV_DEVICE_UNOPENABLE;
-		ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_REOPEN));
-		return ret;
-	}
-
-	ret = iokit_find_ssc_device(&priv->dev, drive_number);
+	ret = iokit_find_ssc_device(&priv->dev, priv->drive_number);
 	if(ret < 0){
 		ret = -EDEV_DEVICE_UNOPENABLE;
 		ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_REOPEN));
@@ -1217,6 +1245,18 @@ int iokit_ibmtape_read(void *device, char *buf, size_t size,
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_READ));
 	ltfsmsg(LTFS_DEBUG3, 30995D, "read", size, priv->drive_serial);
 
+	if (priv->force_readperm) {
+		priv->read_counter++;
+		if (priv->read_counter > priv->force_readperm) {
+			ltfsmsg(LTFS_INFO, 30846I, "read");
+			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_READ));
+			if (priv->force_errortype)
+				return -EDEV_NO_SENSE;
+			else
+				return -EDEV_READ_PERM;
+		}
+	}
+
 	if (global_data.crc_checking) {
 		datacount = size + 4;
 		/* Never fall into this block, fail safe to adjust record length*/
@@ -1363,6 +1403,23 @@ int iokit_ibmtape_write(void *device, const char *buf, size_t count, struct tc_p
 
 	ltfsmsg(LTFS_DEBUG3, 30995D, "write", count, priv->drive_serial);
 
+	if ( priv->force_writeperm ) {
+		priv->write_counter++;
+		if ( priv->write_counter > priv->force_writeperm ) {
+			ltfsmsg(LTFS_INFO, 30846I, "write");
+			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_WRITE));
+			if (priv->force_errortype)
+				return -EDEV_NO_SENSE;
+			else
+				return -EDEV_WRITE_PERM;
+		} else if ( priv->write_counter > (priv->force_writeperm - THRESHOLD_FORCE_WRITE_NO_WRITE) ) {
+			ltfsmsg(LTFS_INFO, 30847I);
+			pos->block++;
+			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_WRITE));
+			return DEVICE_GOOD;
+		}
+	}
+
 	if(global_data.crc_checking) {
 		if (priv->f_crc_enc)
 			priv->f_crc_enc((void *)buf, count);
@@ -1502,6 +1559,13 @@ int iokit_ibmtape_rewind(void *device, struct tc_position *pos)
 	}
 
 	if(ret == DEVICE_GOOD) {
+		/* Clear force perm setting */
+		priv->clear_by_pc     = false;
+		priv->force_writeperm = DEFAULT_WRITEPERM;
+		priv->force_readperm  = DEFAULT_READPERM;
+		priv->write_counter   = 0;
+		priv->read_counter    = 0;
+
 		ret = iokit_ibmtape_readpos(device, pos);
 
 		if(ret == DEVICE_GOOD) {
@@ -1520,6 +1584,7 @@ int iokit_ibmtape_rewind(void *device, struct tc_position *pos)
 int iokit_ibmtape_locate(void *device, struct tc_position dest, struct tc_position *pos)
 {
 	int ret = -EDEV_UNKNOWN;
+	int ret_rp = DEVICE_GOOD;
 	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
 
 	struct iokit_scsi_request req;
@@ -1527,16 +1592,30 @@ int iokit_ibmtape_locate(void *device, struct tc_position dest, struct tc_positi
 	int timeout;
 	char cmd_desc[COMMAND_DESCRIPTION_LENGTH] = "LOCATE";
 	char *msg = NULL;
+	bool pc = false;
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_LOCATE));
 	ltfsmsg(LTFS_DEBUG, 30997D, "locate", dest.partition, dest.block, priv->drive_serial);
+
+	if (pos->partition != dest.partition) {
+		if (priv->clear_by_pc) {
+			/* Clear force perm setting */
+			priv->clear_by_pc     = false;
+			priv->force_writeperm = DEFAULT_WRITEPERM;
+			priv->force_readperm  = DEFAULT_READPERM;
+			priv->write_counter   = 0;
+			priv->read_counter    = 0;
+		}
+		pc = true;
+	}
 
 	// Zero out the CDB and the result buffer
 	memset(cdb, 0, sizeof(cdb));
 	memset(&req, 0, sizeof(struct iokit_scsi_request));
 
 	cdb[0]  = LOCATE16;
-	cdb[1]  = 0x02; /* Set Change partition(CP) flag */
+	if (pc)
+		cdb[1]  = 0x02; /* Set Change partition(CP) flag */
 	cdb[3]  = (unsigned char)(dest.partition & 0xff);
 	ltfs_u64tobe(cdb + 4, dest.block);
 
@@ -1563,13 +1642,15 @@ int iokit_ibmtape_locate(void *device, struct tc_position dest, struct tc_positi
 		}
 	}
 
-	ret = iokit_ibmtape_readpos(device, pos);
-
-	if(ret == DEVICE_GOOD) {
+	ret_rp = iokit_ibmtape_readpos(device, pos);
+	if(ret_rp == DEVICE_GOOD) {
 		if(pos->early_warning)
 			ltfsmsg(LTFS_WARN, 30825W, "locate");
 		else if(pos->programmable_early_warning)
 			ltfsmsg(LTFS_WARN, 30826W, "locate");
+	} else {
+		if (!ret)
+			ret = ret_rp;
 	}
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_LOCATE));
@@ -1820,6 +1901,14 @@ static int _cdb_load_unload(void *device, bool load)
 	req.desc            = cmd_desc;
 
 	ret = iokit_issue_cdb_command(&priv->dev, &req, &msg);
+
+	/* Clear force perm setting */
+	priv->clear_by_pc     = false;
+	priv->force_writeperm = DEFAULT_WRITEPERM;
+	priv->force_readperm  = DEFAULT_READPERM;
+	priv->write_counter   = 0;
+	priv->read_counter    = 0;
+
 	if (ret < 0){
 		_process_errors(device, ret, msg, cmd_desc, true);
 	}
@@ -1837,6 +1926,14 @@ int iokit_ibmtape_load(void *device, struct tc_position *pos)
 	ltfsmsg(LTFS_DEBUG, 30992D, "load", priv->drive_serial);
 
 	ret = _cdb_load_unload(device, true);
+
+	/* Clear force perm setting */
+	priv->clear_by_pc     = false;
+	priv->force_writeperm = DEFAULT_WRITEPERM;
+	priv->force_readperm  = DEFAULT_READPERM;
+	priv->write_counter   = 0;
+	priv->read_counter    = 0;
+
 	iokit_ibmtape_readpos(device, pos);
 	if (ret < 0) {
 		ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_LOAD));
@@ -1980,7 +2077,7 @@ int iokit_ibmtape_setcap(void *device, uint16_t proportion)
 			return ret;
 		}
 
-		if (buf[2] == TC_MP_JK || buf[2] == TC_MP_JL) {
+		if (IS_SHORT_MEDIUM(buf[2]) || IS_WORM_MEDIUM(buf[2])) {
 			/* JK media cannot be scaled */
 			ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETCAP));
 			return ret;
@@ -2024,7 +2121,7 @@ int iokit_ibmtape_setcap(void *device, uint16_t proportion)
 	return ret;
 }
 
-int iokit_ibmtape_format(void *device, TC_FORMAT_TYPE format)
+int iokit_ibmtape_format(void *device, TC_FORMAT_TYPE format, const char *vol_name, const char *barcode_name, const char *vol_mam_uuid)
 {
 	int ret = -EDEV_UNKNOWN, aux_ret;
 	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
@@ -2066,7 +2163,7 @@ int iokit_ibmtape_format(void *device, TC_FORMAT_TYPE format)
 
 	/* Check Cartridge type */
 	aux_ret = iokit_ibmtape_modesense(device, TC_MP_SUPPORTEDPAGE, TC_MP_PC_CURRENT, 0, buf, sizeof(buf));
-	if (!aux_ret) {
+	if (aux_ret >= 0) {
 		priv->cart_type = buf[2];
 		priv->density_code = buf[8];
 	}
@@ -2297,6 +2394,8 @@ int iokit_ibmtape_modesense(void *device, const unsigned char page, const TC_MP_
 	ret = iokit_issue_cdb_command(&priv->dev, &req, &msg);
 	if (ret < 0){
 		_process_errors(device, ret, msg, cmd_desc, true);
+	} else {
+		ret = req.actual_xfered;
 	}
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_MODESENSE));
@@ -2324,6 +2423,7 @@ int iokit_ibmtape_modeselect(void *device, unsigned char *buf, const size_t size
 
 	/* Build CDB */
 	cdb[0] = MODE_SELECT10;
+	cdb[1] = 0x10; /* Set PF bit */
 	ltfs_u16tobe(cdb + 7, size);
 
 	timeout = ibm_tape_get_timeout(priv->timeouts, cdb[0]);
@@ -3117,9 +3217,44 @@ int iokit_ibmtape_get_xattr(void *device, const char *name, char **buf)
 
 int iokit_ibmtape_set_xattr(void *device, const char *name, const char *buf, size_t size)
 {
+	int ret = -LTFS_NO_XATTR;
+	char *null_terminated;
 	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
+	int64_t wp_count = 0;
+
+	if (!size)
+		return -LTFS_BAD_ARG;
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_SETXATTR));
+
+	null_terminated = malloc(size + 1);
+	if (! null_terminated) {
+		ltfsmsg(LTFS_ERR, 10001E, "iokit_ibmtape_set_xattr: null_term");
+		ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETXATTR));
+		return -LTFS_NO_MEMORY;
+	}
+	memcpy(null_terminated, buf, size);
+	null_terminated[size] = '\0';
+
+	if (! strcmp(name, "ltfs.vendor.IBM.forceErrorWrite")) {
+		wp_count = strtoll(null_terminated, NULL, 0);
+		if (wp_count < 0) {
+			priv->force_writeperm = -wp_count;
+			priv->clear_by_pc     = true;
+		}
+		if (priv->force_writeperm && priv->force_writeperm < THRESHOLD_FORCE_WRITE_NO_WRITE)
+			priv->force_writeperm = THRESHOLD_FORCE_WRITE_NO_WRITE;
+		ret = DEVICE_GOOD;
+	} else if (! strcmp(name, "ltfs.vendor.IBM.forceErrorType")) {
+		priv->force_errortype = strtol(null_terminated, NULL, 0);
+		ret = DEVICE_GOOD;
+	} else if (! strcmp(name, "ltfs.vendor.IBM.forceErrorRead")) {
+		priv->force_readperm = strtoull(null_terminated, NULL, 0);
+		priv->read_counter = 0;
+		ret = DEVICE_GOOD;
+	}
+	free(null_terminated);
+
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_SETXATTR));
 	return -LTFS_NO_XATTR;
 }
@@ -3174,7 +3309,7 @@ static int _cdb_read_block_limits(void *device) {
 	return ret;
 }
 
-int iokit_ibmtape_get_parameters(void *device, struct tc_current_param *params)
+int iokit_ibmtape_get_parameters(void *device, struct tc_drive_param *params)
 {
 	int ret = -EDEV_UNKNOWN;
 	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
@@ -3195,11 +3330,11 @@ int iokit_ibmtape_get_parameters(void *device, struct tc_current_param *params)
 			char wp_flag = buf[26];
 
 			if (wp_flag & 0x80) {
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 			} else if (wp_flag & 0x01) {
-				params->write_protected |= VOL_PERM_WP;
+				params->write_protect |= VOL_PERM_WP;
 			} else if (wp_flag & 0x10) {
-				params->write_protected |= VOL_PERS_WP;
+				params->write_protect |= VOL_PERS_WP;
 			}
 
 			/* TODO: Following field shall be implemented in the future */
@@ -3218,7 +3353,7 @@ int iokit_ibmtape_get_parameters(void *device, struct tc_current_param *params)
 				goto out;
 
 			if (buf[3] & 0x80) {
-				params->write_protected |= VOL_PHYSICAL_WP;
+				params->write_protect |= VOL_PHYSICAL_WP;
 			}
 
 			/* TODO: Following field shall be implemented in the future */
@@ -3359,6 +3494,10 @@ int iokit_ibmtape_get_device_list(struct tc_drive_info *buf, int count)
 					snprintf(buf[i].model, TAPE_MODEL_NAME_LEN_MAX, "%s", identifier.product_id);
 					snprintf(buf[i].serial_number, TAPE_SERIAL_LEN_MAX, "%s", identifier.unit_serial);
 					snprintf(buf[i].product_name, PRODUCT_NAME_LENGTH, "%s", _generate_product_name(identifier.product_id));
+					buf[i].host    = 0;
+					buf[i].channel = 0;
+					buf[i].target  = 0;
+					buf[i].lun     = -1;
 				}
 				found ++;
 			}
@@ -3369,7 +3508,7 @@ int iokit_ibmtape_get_device_list(struct tc_drive_info *buf, int count)
 	return found;
 }
 
-void iokit_ibmtape_help_message(void)
+void iokit_ibmtape_help_message(const char *progname)
 {
 	ltfsresult(30999I, default_device);
 }
@@ -3832,12 +3971,20 @@ bool iokit_ibmtape_is_readonly(void *device)
 
 int iokit_ibmtape_get_worm_status(void *device, bool *is_worm)
 {
+	int rc = 0;
 	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_ENTER(REQ_TC_GETWORMSTAT));
-	*is_worm = false;
+	if (priv->loaded) {
+		*is_worm = priv->is_worm;
+	} else {
+		ltfsmsg(LTFS_INFO, 30870I);
+		*is_worm = false;
+		rc = -1;
+	}
+
 	ltfs_profiler_add_entry(priv->profiler, NULL, TAPEBEND_REQ_EXIT(REQ_TC_GETWORMSTAT));
-	return 0;
+	return rc;
 }
 
 int iokit_ibmtape_get_serialnumber(void *device, char **result)
@@ -3857,6 +4004,15 @@ int iokit_ibmtape_get_serialnumber(void *device, char **result)
 	}
 
 	ltfs_profiler_add_entry(priv->profiler, NULL, CHANGER_REQ_EXIT(REQ_TC_GETSER));
+
+	return 0;
+}
+
+int iokit_ibmtape_get_info(void *device, struct tc_drive_info *info)
+{
+	struct iokit_ibmtape_data *priv = (struct iokit_ibmtape_data*)device;
+
+	memcpy(info, &priv->info, sizeof(struct tc_drive_info));
 
 	return 0;
 }
@@ -4009,6 +4165,7 @@ struct tape_ops iokit_ibmtape_handler = {
 	.is_mountable           = iokit_ibmtape_is_mountable,
 	.get_worm_status        = iokit_ibmtape_get_worm_status,
 	.get_serialnumber       = iokit_ibmtape_get_serialnumber,
+	.get_info               = iokit_ibmtape_get_info,
 	.set_profiler           = iokit_ibmtape_set_profiler,
 	.get_block_in_buffer    = iokit_ibmtape_get_block_in_buffer,
 	.is_readonly            = iokit_ibmtape_is_readonly,

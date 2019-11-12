@@ -3,7 +3,7 @@
 **  OO_Copyright_BEGIN
 **
 **
-**  Copyright 2010, 2018 IBM Corp. All rights reserved.
+**  Copyright 2010, 2019 IBM Corp. All rights reserved.
 **
 **  Redistribution and use in source and binary forms, with or without
 **   modification, are permitted provided that the following conditions
@@ -328,9 +328,9 @@ int ltfs_fuse_statfs(const char *path, struct statvfs *buf)
 	stats->f_blocks = blockstat.total_dp;           /* Total tape capacity */
 	stats->f_bfree = blockstat.remaining_dp;        /* Remaining tape capacity */
 	stats->f_bavail = stats->f_bfree;               /* Blocks available for normal user (ignored) */
-	stats->f_files = ltfs_get_file_count(priv->data);
 
-	stats->f_ffree = UINT32_MAX - stats->f_files;   /* Assuming file count fits in 32 bits. */
+	stats->f_files = UINT64_MAX;
+	stats->f_ffree = UINT64_MAX - ltfs_get_file_count(priv->data);
 	memcpy(buf, stats, sizeof(struct statvfs));
 
 #ifdef __APPLE__
@@ -843,7 +843,7 @@ int _ltfs_fuse_filldir(void *buf, const char *name, void *priv)
 #ifdef __APPLE__
 	free(new_name);
 
-	ret = pathname_nfd_normaize(name, &new_name);
+	ret = pathname_nfd_normalize(name, &new_name);
 	if (ret < 0) {
 		ltfsmsg(LTFS_ERR, 14027E, "nfd", ret);
 		return ret;
